@@ -1,12 +1,14 @@
 """
-DuckDuckGo AI Chat Client — Full Playwright Backend
-- Runs the entire chat request inside a real browser via Playwright
-- Bypasses DDG's JS challenge completely by executing in real Chromium
-- Intercepts the SSE response directly from the browser network
+DuckDuckGo AI Chat Client — Playwright Cookie Extraction + httpx
+- Browser visits DDG to solve JS challenge and get valid cookies/headers
+- Python (httpx) sends the actual chat request using those cookies
+- Avoids "Failed to fetch" issue in restricted environments (HuggingFace)
 """
 import asyncio
 import json
-from playwright.async_api import async_playwright, Browser, Page
+import random
+import httpx
+from playwright.async_api import async_playwright, Browser
 
 # ── Model name mapping ────────────────────────────────────────────────────────
 MODEL_MAP = {
@@ -32,61 +34,43 @@ MODEL_MAP = {
 }
 
 MAX_RETRIES  = 3
-DDG_CHAT_URL = "https://duckduckgo.com/duckchat/v1/chat"
-DDG_HOME_URL = "https://duckduckgo.com/?q=DuckDuckGo+AI+Chat&ia=chat"
+DDG_STATUS_URL = "https://duckduckgo.com/duckchat/v1/status"
+DDG_CHAT_URL   = "https://duckduckgo.com/duckchat/v1/chat"
+DDG_HOME_URL   = "https://duck.ai/"
 
-# ── User Agent Pool ──────────────────────────────────────────────────────────
-import random
-
+# ── User-Agent pool ───────────────────────────────────────────────────────────
 USER_AGENTS = [
-    # ── Chrome Windows (most common) ──────────────────────────────────────────
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
-    # ── Chrome macOS ──────────────────────────────────────────────────────────
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
-    # ── Chrome Linux ──────────────────────────────────────────────────────────
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Ubuntu; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
-    # ── Firefox Windows ───────────────────────────────────────────────────────
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:135.0) Gecko/20100101 Firefox/135.0",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:134.0) Gecko/20100101 Firefox/134.0",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0",
-    # ── Firefox macOS ─────────────────────────────────────────────────────────
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 14.7; rv:135.0) Gecko/20100101 Firefox/135.0",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 14.6; rv:134.0) Gecko/20100101 Firefox/134.0",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 13.6; rv:133.0) Gecko/20100101 Firefox/133.0",
-    # ── Firefox Linux ─────────────────────────────────────────────────────────
     "Mozilla/5.0 (X11; Linux x86_64; rv:135.0) Gecko/20100101 Firefox/135.0",
-    "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:134.0) Gecko/20100101 Firefox/134.0",
-    # ── Edge ──────────────────────────────────────────────────────────────────
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 Edg/133.0.0.0",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 Edg/132.0.0.0",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 Edg/133.0.0.0",
-    # ── Safari macOS ──────────────────────────────────────────────────────────
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_4) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Safari/605.1.15",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1.1 Safari/605.1.15",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6_4) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15",
-    # ── Safari iPhone ─────────────────────────────────────────────────────────
     "Mozilla/5.0 (iPhone; CPU iPhone OS 18_3_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Mobile/15E148 Safari/604.1",
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
 ]
 
-def _random_ua() -> str:
-    return random.choice(USER_AGENTS)
-
-# ── Shared browser instance ───────────────────────────────────────────────────
-_playwright = None
+# ── Shared state ──────────────────────────────────────────────────────────────
+_playwright_inst = None
 _browser: Browser | None = None
 _browser_lock = asyncio.Lock()
+
+# Cached session: {ua, cookies, vqd, hash, expires}
+_session: dict = {}
 
 
 def _resolve_model(model: str) -> str:
@@ -103,141 +87,168 @@ def _build_messages(prompt: str, history: list | None) -> list:
 
 
 async def _get_browser() -> Browser:
-    global _playwright, _browser
+    global _playwright_inst, _browser
     async with _browser_lock:
         if _browser is None or not _browser.is_connected():
-            _playwright = await async_playwright().start()
-            _browser = await _playwright.chromium.launch(
+            _playwright_inst = await async_playwright().start()
+            _browser = await _playwright_inst.chromium.launch(
                 headless=True,
-                args=[
-                    "--no-sandbox",
-                    "--disable-setuid-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu",
-                    "--no-first-run",
-                    "--single-process",
-                ],
+                args=["--no-sandbox", "--disable-setuid-sandbox",
+                      "--disable-dev-shm-usage", "--disable-gpu",
+                      "--no-first-run", "--single-process"],
             )
             print("[ddg] Playwright browser started")
     return _browser
 
 
-async def _chat_in_browser(model: str, messages: list) -> str:
+async def _refresh_session() -> dict:
     """
-    Run the entire DDG chat inside a real browser page.
-    Uses fetch() from within the page context so JS challenge is solved natively.
-    Intercepts the response body directly.
+    Visit duck.ai in a real browser to:
+    1. Solve JS challenge and get valid cookies
+    2. Intercept the status request to get x-vqd-4 / x-vqd-hash-1
+    Returns a session dict with cookies + tokens.
     """
+    import time
+    ua      = random.choice(USER_AGENTS)
     browser = await _get_browser()
-    ua = _random_ua()
     context = await browser.new_context(
         user_agent=ua,
-        locale="en-US",
-        timezone_id="America/New_York",
-        extra_http_headers={
-            "Accept-Language": "en-US,en;q=0.9",
-            "sec-ch-ua": '"Chromium";v="133", "Not(A:Brand";v="99"',
-            "sec-ch-ua-mobile": "?0",
-            "sec-ch-ua-platform": '"Windows"',
-        },
+        extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
     )
-    print(f"[ddg] Using UA: {ua[:60]}...")
-    page: Page = await context.new_page()
+
+    vqd_token = ""
+    vqd_hash  = ""
+    got_token = asyncio.Event()
+
+    async def on_response(resp):
+        nonlocal vqd_token, vqd_hash
+        if "duckchat/v1/status" in resp.url:
+            h = resp.headers
+            vqd_token = h.get("x-vqd-4", "")
+            vqd_hash  = h.get("x-vqd-hash-1", "")
+            print(f"[ddg] Status intercepted — vqd4={'✓' if vqd_token else '✗'} hash={'✓' if vqd_hash else '✗'}")
+            got_token.set()
+
+    page = await context.new_page()
+    page.on("response", on_response)
 
     try:
-        # Navigate to DDG first so we're on the right origin
         await page.goto(DDG_HOME_URL, wait_until="domcontentloaded", timeout=30000)
 
-        # Execute chat request via fetch() inside the browser — 
-        # this means DDG's JS challenge runs natively
-        result = await page.evaluate("""
-            async ([chatUrl, model, messages]) => {
-                // Step 1: get VQD token + hash via status endpoint
-                const statusResp = await fetch('https://duckduckgo.com/duckchat/v1/status', {
-                    headers: {
-                        'accept': 'text/event-stream',
-                        'accept-language': 'en-US,en;q=0.9',
-                        'cache-control': 'no-cache',
-                        'content-type': 'application/json',
-                        'pragma': 'no-cache',
-                        'x-vqd-accept': '1'
-                    }
-                });
+        # Wait for status request; if not triggered, force it
+        try:
+            await asyncio.wait_for(got_token.wait(), timeout=8)
+        except asyncio.TimeoutError:
+            print("[ddg] Forcing status request via CDP fetch...")
+            await page.evaluate("""
+                fetch('https://duckduckgo.com/duckchat/v1/status',
+                      {headers:{'x-vqd-accept':'1','cache-control':'no-cache'}})
+            """)
+            await asyncio.wait_for(got_token.wait(), timeout=8)
 
-                const vqd4   = statusResp.headers.get('x-vqd-4') || '';
-                const hash1  = statusResp.headers.get('x-vqd-hash-1') || '';
+        # Extract cookies from browser context
+        raw_cookies = await context.cookies("https://duckduckgo.com")
+        cookie_str  = "; ".join(f"{c['name']}={c['value']}" for c in raw_cookies)
 
-                if (!vqd4 && !hash1) {
-                    return {error: 'No VQD token from status endpoint'};
-                }
-
-                // Step 2: send chat request
-                const chatHeaders = {
-                    'accept': 'text/event-stream',
-                    'accept-language': 'en-US,en;q=0.9',
-                    'cache-control': 'no-cache',
-                    'content-type': 'application/json',
-                    'pragma': 'no-cache',
-                    'origin': 'https://duckduckgo.com',
-                    'referer': 'https://duckduckgo.com/'
-                };
-                if (vqd4)  chatHeaders['x-vqd-4']      = vqd4;
-                if (hash1) chatHeaders['x-vqd-hash-1'] = hash1;
-
-                const chatResp = await fetch(chatUrl, {
-                    method: 'POST',
-                    headers: chatHeaders,
-                    body: JSON.stringify({model, messages})
-                });
-
-                if (!chatResp.ok) {
-                    const txt = await chatResp.text();
-                    return {error: `HTTP ${chatResp.status}: ${txt.slice(0, 300)}`};
-                }
-
-                // Step 3: read SSE stream and collect message chunks
-                const text = await chatResp.text();
-                const parts = [];
-                for (const line of text.split('\\n')) {
-                    if (!line.startsWith('data: ')) continue;
-                    const chunk = line.slice(6).trim();
-                    if (chunk === '[DONE]' || chunk === '') continue;
-                    try {
-                        const obj = JSON.parse(chunk);
-                        if (obj.message) parts.push(obj.message);
-                    } catch(e) {}
-                }
-                return {result: parts.join('')};
-            }
-        """, [DDG_CHAT_URL, model, messages])
-
-        if result.get("error"):
-            raise ValueError(result["error"])
-
-        text = result.get("result", "").strip()
-        if not text:
-            raise ValueError("Empty response from DuckDuckGo")
-        return text
+        session = {
+            "ua":      ua,
+            "cookies": cookie_str,
+            "vqd":     vqd_token,
+            "hash":    vqd_hash,
+            "expires": time.time() + 50 * 60,  # 50 min
+        }
+        print(f"[ddg] Session refreshed — cookies={len(raw_cookies)}, ua=...{ua[-30:]}")
+        return session
 
     finally:
         await page.close()
         await context.close()
 
 
-async def ask(prompt: str, model: str = "auto", history: list | None = None) -> str:
-    ddg_model = _resolve_model(model)
-    messages  = _build_messages(prompt, history)
+async def _get_session(force: bool = False) -> dict:
+    import time
+    global _session
+    if not force and _session.get("expires", 0) > time.time():
+        return _session
+    _session = await _refresh_session()
+    return _session
 
-    last_error = None
+
+async def _do_chat(model: str, messages: list, force_refresh: bool = False) -> str:
+    session = await _get_session(force=force_refresh)
+
+    headers = {
+        "User-Agent":      session["ua"],
+        "Accept":          "text/event-stream",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Cache-Control":   "no-cache",
+        "Pragma":          "no-cache",
+        "Content-Type":    "application/json",
+        "Origin":          "https://duckduckgo.com",
+        "Referer":         "https://duckduckgo.com/",
+    }
+    if session["cookies"]:
+        headers["Cookie"] = session["cookies"]
+    if session["vqd"]:
+        headers["x-vqd-4"] = session["vqd"]
+    if session["hash"]:
+        headers["x-vqd-hash-1"] = session["hash"]
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            DDG_CHAT_URL,
+            headers=headers,
+            content=json.dumps({"model": model, "messages": messages}),
+            timeout=60,
+        )
+
+    if resp.status_code in (418, 403):
+        raise ValueError(f"CHALLENGE:{resp.status_code}")
+    if resp.status_code == 429:
+        raise ValueError("RateLimit")
+    if resp.status_code != 200:
+        raise ValueError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+
+    parts = []
+    for line in resp.text.splitlines():
+        if not line.startswith("data: "):
+            continue
+        chunk = line[6:].strip()
+        if chunk in ("[DONE]", ""):
+            continue
+        try:
+            obj = json.loads(chunk)
+            if obj.get("message"):
+                parts.append(obj["message"])
+        except json.JSONDecodeError:
+            continue
+
+    result = "".join(parts).strip()
+    if not result:
+        raise ValueError("Empty response")
+    return result
+
+
+async def ask(prompt: str, model: str = "auto", history: list | None = None) -> str:
+    ddg_model     = _resolve_model(model)
+    messages      = _build_messages(prompt, history)
+    force_refresh = False
+    last_error    = None
+
     for attempt in range(MAX_RETRIES):
         try:
-            return await _chat_in_browser(ddg_model, messages)
+            return await _do_chat(ddg_model, messages, force_refresh=force_refresh)
         except Exception as e:
             last_error = e
+            err = str(e).lower()
             print(f"[ddg] attempt {attempt+1} failed: {e}")
-            if attempt < MAX_RETRIES - 1:
+            if "challenge" in err or "418" in err or "403" in err:
+                force_refresh = True
+                await asyncio.sleep(2)
+            elif "ratelimit" in err or "429" in err:
                 await asyncio.sleep(2 ** attempt)
-            continue
+            elif attempt < MAX_RETRIES - 1:
+                await asyncio.sleep(1)
 
     raise ValueError(f"DuckDuckGo AI failed after {MAX_RETRIES} attempts: {last_error}")
 
