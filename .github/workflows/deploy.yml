@@ -25,7 +25,10 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Install Playwright browser
-        run: playwright install chromium --with-deps
+        run: |
+          # Ubuntu 24.04 renamed libasound2 → libasound2t64
+          sudo apt-get install -y libasound2t64 || true
+          playwright install chromium --with-deps
 
       - name: Check imports & syntax
         run: |
