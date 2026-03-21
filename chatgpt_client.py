@@ -1,35 +1,30 @@
 """
 DuckDuckGo AI Chat Client
-- Uses duckduckgo_search library (handles x-vqd-4 token automatically)
-- No login required, no browser needed
+- Calls DDG API directly with httpx (no ddgs/duckduckgo_search library needed)
+- Handles x-vqd-4 token automatically
 - Retry logic for rate limits and token errors
 """
 import asyncio
-
-from ddgs import DDGS  # pip install ddgs>=7.0.0
+import json
+import httpx
 
 # ── Model name mapping ────────────────────────────────────────────────────────
 MODEL_MAP = {
     "gpt-5-mini":               "gpt-5-mini",
     "gpt5-mini":                "gpt-5-mini",
     "auto":                     "gpt-5-mini",
-
     "gpt-4o-mini":              "gpt-4o-mini",
     "gpt-4o":                   "gpt-4o-mini",
-
     "gpt-oss-120b":             "gpt-oss-120b",
     "gpt-oss":                  "gpt-oss-120b",
-
     "llama-4-scout":            "llama-4-scout",
     "llama4":                   "llama-4-scout",
     "llama":                    "llama-4-scout",
     "llama-3.3-70b":            "llama-4-scout",
-
     "claude-haiku-4.5":         "claude-3-haiku-20240307",
     "claude-haiku":             "claude-3-haiku-20240307",
     "claude-3-haiku":           "claude-3-haiku-20240307",
     "claude-3-haiku-20240307":  "claude-3-haiku-20240307",
-
     "mistral-small-3":          "mistralai/Mistral-Small-24B-Instruct-2501",
     "mistral":                  "mistralai/Mistral-Small-24B-Instruct-2501",
     "mixtral-8x7b":             "mistralai/Mistral-Small-24B-Instruct-2501",
@@ -38,54 +33,97 @@ MODEL_MAP = {
 
 MAX_RETRIES = 3
 
+DDG_STATUS_URL = "https://duckduckgo.com/duckchat/v1/status"
+DDG_CHAT_URL   = "https://duckduckgo.com/duckchat/v1/chat"
+
+HEADERS_BASE = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "text/event-stream",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Origin": "https://duckduckgo.com",
+    "Referer": "https://duckduckgo.com/",
+}
+
 
 def _resolve_model(model: str) -> str:
     return MODEL_MAP.get(model, MODEL_MAP["auto"])
 
 
-def _build_prompt(prompt: str, history: list | None) -> str:
-    """Flatten history + prompt into a single string for DDGS.chat()"""
-    if not history:
-        return prompt
-    parts = []
-    for msg in history:
-        role = msg.get("role", "user")
-        content = msg.get("content", "")
-        prefix = "User" if role == "user" else "Assistant"
-        parts.append(f"{prefix}: {content}")
-    parts.append(f"User: {prompt}")
-    return "\n".join(parts)
+def _build_messages(prompt: str, history: list | None) -> list:
+    messages = []
+    if history:
+        for msg in history:
+            messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
+    messages.append({"role": "user", "content": prompt})
+    return messages
+
+
+async def _get_vqd_token(client: httpx.AsyncClient, model: str) -> str:
+    resp = await client.get(
+        DDG_STATUS_URL,
+        headers={**HEADERS_BASE, "x-vqd-accept": "1"},
+        params={"chat": model},
+        timeout=10,
+    )
+    token = resp.headers.get("x-vqd-4", "")
+    if not token:
+        raise ValueError("Could not get x-vqd-4 token from DuckDuckGo")
+    return token
+
+
+async def _do_chat(client: httpx.AsyncClient, model: str, messages: list) -> str:
+    vqd_token = await _get_vqd_token(client, model)
+    payload = {"model": model, "messages": messages}
+
+    resp = await client.post(
+        DDG_CHAT_URL,
+        headers={**HEADERS_BASE, "Content-Type": "application/json", "x-vqd-4": vqd_token},
+        content=json.dumps(payload),
+        timeout=60,
+    )
+
+    if resp.status_code == 429:
+        raise ValueError("RateLimit: DuckDuckGo rate limit hit")
+    if resp.status_code != 200:
+        raise ValueError(f"DDG returned HTTP {resp.status_code}: {resp.text[:200]}")
+
+    result_parts = []
+    for line in resp.text.splitlines():
+        if not line.startswith("data: "):
+            continue
+        chunk = line[6:].strip()
+        if chunk in ("[DONE]", ""):
+            continue
+        try:
+            obj = json.loads(chunk)
+            msg = obj.get("message", "")
+            if msg:
+                result_parts.append(msg)
+        except json.JSONDecodeError:
+            continue
+
+    full = "".join(result_parts).strip()
+    if not full:
+        raise ValueError("Empty response from DuckDuckGo")
+    return full
 
 
 async def ask(prompt: str, model: str = "auto", history: list | None = None) -> str:
-    """
-    Send a prompt to DuckDuckGo AI Chat and return the full response.
-    Uses duckduckgo_search library which handles token management automatically.
-    Retries up to MAX_RETRIES times on failure.
-    """
     ddg_model = _resolve_model(model)
-    full_prompt = _build_prompt(prompt, history)
+    messages  = _build_messages(prompt, history)
 
     last_error = None
     for attempt in range(MAX_RETRIES):
         try:
-            # DDGS.chat() is synchronous — run in thread pool to avoid blocking
-            result = await asyncio.get_running_loop().run_in_executor(
-                None,
-                lambda: DDGS().chat(full_prompt, model=ddg_model)
-            )
-            if result:
-                return result.strip()
-            raise ValueError("Empty response from DuckDuckGo")
+            async with httpx.AsyncClient() as client:
+                return await _do_chat(client, ddg_model, messages)
         except Exception as e:
             last_error = e
             err_str = str(e).lower()
-            # Rate limit or token error → wait and retry
             if "ratelimit" in err_str or "429" in err_str or "vqd" in err_str:
-                wait = 2 ** attempt  # 1s, 2s, 4s
-                await asyncio.sleep(wait)
+                await asyncio.sleep(2 ** attempt)
                 continue
-            # Other errors → retry once then raise
             if attempt < MAX_RETRIES - 1:
                 await asyncio.sleep(1)
                 continue
