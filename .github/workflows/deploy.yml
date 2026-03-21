@@ -24,37 +24,29 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Install Playwright browser
-        run: |
-          # Install Chromium deps manually (Ubuntu 24.04 compat)
-          sudo apt-get install -y             libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2             libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2             libgbm1 libpango-1.0-0 libcairo2 libasound2t64 fonts-liberation
-          # Install browser without --with-deps to skip broken apt step
-          playwright install chromium
-
       - name: Check imports & syntax
         run: |
           python -c "import chatgpt_client; print('✅ chatgpt_client OK')"
           python -c "import stats; print('✅ stats OK')"
           python -c "import keepalive; print('✅ keepalive OK')"
           python -c "from main import app; print('✅ main/FastAPI app OK')"
-          python -c "from playwright.async_api import async_playwright; print('✅ playwright OK')"
+          python -c "from duckai import DuckAI; print('✅ duckai OK')"
 
-      - name: Verify no ddgs/duckduckgo_search dependency
+      - name: Verify no playwright dependency
         run: |
           python -c "
           import pkg_resources
           pkgs = [p.project_name for p in pkg_resources.working_set]
-          assert 'ddgs' not in pkgs, '❌ ddgs should not be installed'
-          assert 'duckduckgo-search' not in pkgs, '❌ duckduckgo-search should not be installed'
-          print('✅ No DDG library — using Playwright + httpx')
+          assert 'playwright' not in pkgs, '❌ playwright should not be installed'
+          print('✅ No Playwright — using duckai')
           "
 
   # ── 2. Deploy to HuggingFace ──────────────────────────────────────────────────
   deploy:
     name: Deploy to HuggingFace Space
     runs-on: ubuntu-latest
-    needs: test                         # only runs if tests pass
-    if: github.ref == 'refs/heads/main' # only on push to main, not PRs
+    needs: test
+    if: github.ref == 'refs/heads/main'
 
     steps:
       - name: Checkout code
@@ -88,14 +80,11 @@ jobs:
           git config --global user.email "github-actions@github.com"
           git config --global user.name  "GitHub Actions"
 
-          # Commit README fix if it changed
           git add README.md
           git diff --cached --quiet || git commit -m "ci: fix README short_description for HF"
 
-          # Add HuggingFace remote
           git remote add hf https://nopoh22:${HF_TOKEN}@huggingface.co/spaces/nopoh22/mse-ai-api
 
-          # Force push to HF (triggers rebuild)
           git push hf main --force
 
       - name: Wait for Space to rebuild
