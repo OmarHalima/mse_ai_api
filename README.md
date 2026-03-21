@@ -5,13 +5,14 @@ colorFrom: purple
 colorTo: blue
 sdk: docker
 pinned: true
-short_description: Free OpenAI API via DuckDuckGo — No login needed
+short_description: Free OpenAI API via DuckDuckGo AI Chat
+---
 
 # ⚡ mse_ai_api — Free OpenAI-Compatible API
 
-A production-ready **FastAPI** server that provides a **free OpenAI-compatible API** powered by **DuckDuckGo AI Chat** — no login, no API key, no browser needed.
+A production-ready **FastAPI** server powered by **DuckDuckGo AI Chat** — no login, no API key needed.
 
-## 🌐 Live Endpoints
+## 🌐 Endpoints
 
 | Endpoint | Description |
 |---|---|
@@ -22,7 +23,7 @@ A production-ready **FastAPI** server that provides a **free OpenAI-compatible A
 | `GET /v1/models` | List models |
 | `GET /docs` | Swagger UI |
 
-## 🤖 Available Models (Free)
+## 🤖 Available Models
 
 | Model ID | Name |
 |---|---|
@@ -40,16 +41,3 @@ curl -X POST https://YOUR-SPACE.hf.space/v1/chat/completions \
   -H "Authorization: Bearer change-secret-key-2026" \
   -H "Content-Type: application/json" \
   -d '{"model": "gpt-5-mini", "messages": [{"role": "user", "content": "Hello!"}]}'
-```
-
-## ⚙️ Environment Variables
-
-| Variable | Default | Description |
-|---|---|---|
-| `API_SECRET_KEY` | `change-secret-key-2026` | API protection key |
-| `PORT` | `7860` | Server port |
-
-## 🛠️ n8n Setup
-
-- Base URL: `https://YOUR-SPACE.hf.space/v1`
-- API Key: your `API_SECRET_KEY`
