@@ -5,14 +5,14 @@ colorFrom: purple
 colorTo: blue
 sdk: docker
 pinned: true
-short_description: Free OpenAI API via DuckDuckGo AI Chat
+short_description: Free OpenAI-compatible API via DuckDuckGo AI — No login needed
 ---
 
 # ⚡ mse_ai_api — Free OpenAI-Compatible API
 
-A production-ready **FastAPI** server powered by **DuckDuckGo AI Chat** — no login, no API key needed.
+A production-ready **FastAPI** server that provides a **free OpenAI-compatible API** powered by **DuckDuckGo AI Chat** — no login, no API key, no browser needed.
 
-## 🌐 Endpoints
+## 🌐 Live Endpoints
 
 | Endpoint | Description |
 |---|---|
@@ -23,19 +23,34 @@ A production-ready **FastAPI** server powered by **DuckDuckGo AI Chat** — no l
 | `GET /v1/models` | List models |
 | `GET /docs` | Swagger UI |
 
-## 🤖 Available Models
+## 🤖 Available Models (Free)
 
 | Model ID | Name |
 |---|---|
-| `gpt-5-mini` | GPT-5 mini default |
+| `gpt-5-mini` | GPT-5 mini ⭐ default |
 | `gpt-4o-mini` | GPT-4o mini |
 | `gpt-oss-120b` | GPT-OSS 120B |
 | `llama-4-scout` | Llama 4 Scout |
 | `claude-haiku-4.5` | Claude Haiku 4.5 |
 | `mistral-small-3` | Mistral Small 3 |
 
-## API Usage
+## 🔌 Usage
 
-Base URL: `https://nopoh22-mse-ai-api.hf.space/v1`
+```bash
+curl -X POST https://YOUR-SPACE.hf.space/v1/chat/completions \
+  -H "Authorization: Bearer change-secret-key-2026" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "gpt-5-mini", "messages": [{"role": "user", "content": "Hello!"}]}'
+```
 
-Header: `Authorization: Bearer YOUR_API_SECRET_KEY`
+## ⚙️ Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `API_SECRET_KEY` | `change-secret-key-2026` | API protection key |
+| `PORT` | `7860` | Server port |
+
+## 🛠️ n8n Setup
+
+- Base URL: `https://YOUR-SPACE.hf.space/v1`
+- API Key: your `API_SECRET_KEY`
