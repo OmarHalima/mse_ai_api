@@ -55,12 +55,34 @@ jobs:
           fetch-depth: 0
           lfs: true
 
+      - name: Fix README short_description (HF max 60 chars)
+        run: |
+          python3 - <<'EOF'
+          import re, pathlib
+          readme = pathlib.Path("README.md")
+          text   = readme.read_text()
+          fixed  = re.sub(
+              r"^short_description:.*$",
+              "short_description: Free OpenAI API via DuckDuckGo AI Chat",
+              text, flags=re.MULTILINE,
+          )
+          readme.write_text(fixed)
+          m = re.search(r"^short_description:\s*(.+)$", fixed, re.MULTILINE)
+          desc = m.group(1).strip() if m else ""
+          assert len(desc) <= 60, f"short_description too long: {len(desc)} chars"
+          print(f"✅ short_description OK ({len(desc)} chars): {desc}")
+          EOF
+
       - name: Push to HuggingFace Space
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           git config --global user.email "github-actions@github.com"
           git config --global user.name  "GitHub Actions"
+
+          # Commit README fix if it changed
+          git add README.md
+          git diff --cached --quiet || git commit -m "ci: fix README short_description for HF"
 
           # Add HuggingFace remote
           git remote add hf https://nopoh22:${HF_TOKEN}@huggingface.co/spaces/nopoh22/mse-ai-api
