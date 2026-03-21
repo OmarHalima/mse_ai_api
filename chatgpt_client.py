@@ -1,16 +1,12 @@
 """
-DuckDuckGo AI Chat Client — Playwright Backend
-- Uses headless Chromium to bypass DDG's JS challenge
-- Intercepts the real x-vqd-4 token from browser network requests
-- Caches the token and reuses it until it expires
-- Falls back to re-fetching token on 418/403 errors
+DuckDuckGo AI Chat Client — Full Playwright Backend
+- Runs the entire chat request inside a real browser via Playwright
+- Bypasses DDG's JS challenge completely by executing in real Chromium
+- Intercepts the SSE response directly from the browser network
 """
 import asyncio
 import json
-import re
-import time
-import httpx
-from playwright.async_api import async_playwright, Browser, BrowserContext
+from playwright.async_api import async_playwright, Browser, Page
 
 # ── Model name mapping ────────────────────────────────────────────────────────
 MODEL_MAP = {
@@ -35,30 +31,14 @@ MODEL_MAP = {
     "mixtral":                  "mistralai/Mistral-Small-24B-Instruct-2501",
 }
 
-MAX_RETRIES   = 3
-TOKEN_TTL     = 55 * 60   # re-fetch token every 55 minutes
+MAX_RETRIES  = 3
+DDG_CHAT_URL = "https://duckduckgo.com/duckchat/v1/chat"
+DDG_HOME_URL = "https://duckduckgo.com/?q=DuckDuckGo+AI+Chat&ia=chat"
 
-DDG_CHAT_URL   = "https://duckduckgo.com/duckchat/v1/chat"
-DDG_STATUS_URL = "https://duckduckgo.com/duckchat/v1/status"
-DDG_HOME_URL   = "https://duckduckgo.com/?q=DuckDuckGo+AI+Chat&ia=chat"
-
-HEADERS_BASE = {
-    "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                       "(KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
-    "Accept":          "text/event-stream",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Cache-Control":   "no-cache",
-    "Pragma":          "no-cache",
-    "Origin":          "https://duckduckgo.com",
-    "Referer":         "https://duckduckgo.com/",
-    "Content-Type":    "application/json",
-}
-
-# ── Global token cache ────────────────────────────────────────────────────────
-_token_cache: dict = {"vqd": None, "hash": None, "expires": 0}
-_token_lock = asyncio.Lock()
-_playwright_instance = None
+# ── Shared browser instance ───────────────────────────────────────────────────
+_playwright = None
 _browser: Browser | None = None
+_browser_lock = asyncio.Lock()
 
 
 def _resolve_model(model: str) -> str:
@@ -75,175 +55,132 @@ def _build_messages(prompt: str, history: list | None) -> list:
 
 
 async def _get_browser() -> Browser:
-    """Get or create a shared Playwright browser instance."""
-    global _playwright_instance, _browser
-    if _browser is None or not _browser.is_connected():
-        _playwright_instance = await async_playwright().start()
-        _browser = await _playwright_instance.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-                "--no-first-run",
-                "--no-zygote",
-                "--single-process",
-            ],
-        )
-        print("[ddg] Playwright browser started")
+    global _playwright, _browser
+    async with _browser_lock:
+        if _browser is None or not _browser.is_connected():
+            _playwright = await async_playwright().start()
+            _browser = await _playwright.chromium.launch(
+                headless=True,
+                args=[
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                    "--no-first-run",
+                    "--single-process",
+                ],
+            )
+            print("[ddg] Playwright browser started")
     return _browser
 
 
-async def _fetch_token_via_browser() -> tuple[str, str]:
+async def _chat_in_browser(model: str, messages: list) -> str:
     """
-    Open DDG in headless browser, intercept the status request,
-    and extract x-vqd-4 and x-vqd-hash-1 tokens.
+    Run the entire DDG chat inside a real browser page.
+    Uses fetch() from within the page context so JS challenge is solved natively.
+    Intercepts the response body directly.
     """
     browser = await _get_browser()
-    context: BrowserContext = await browser.new_context(
-        user_agent=HEADERS_BASE["User-Agent"],
-        extra_http_headers={
-            "Accept-Language": "en-US,en;q=0.9",
-        },
+    context = await browser.new_context(
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
     )
-
-    vqd_token = None
-    vqd_hash  = None
-    event     = asyncio.Event()
-
-    async def on_response(response):
-        nonlocal vqd_token, vqd_hash
-        if "duckchat/v1/status" in response.url:
-            headers = response.headers
-            vqd_token = headers.get("x-vqd-4", "")
-            vqd_hash  = headers.get("x-vqd-hash-1", "")
-            print(f"[ddg] Token intercepted — vqd-4: {'✓' if vqd_token else '✗'}, hash-1: {'✓' if vqd_hash else '✗'}")
-            event.set()
-
-    page = await context.new_page()
-    page.on("response", on_response)
+    page: Page = await context.new_page()
 
     try:
-        # Navigate to DDG AI Chat page — this triggers the status request
+        # Navigate to DDG first so we're on the right origin
         await page.goto(DDG_HOME_URL, wait_until="domcontentloaded", timeout=30000)
 
-        # Wait up to 10s for the status request to be intercepted
-        try:
-            await asyncio.wait_for(event.wait(), timeout=10)
-        except asyncio.TimeoutError:
-            # Manually trigger the status request via JS if page didn't do it
-            print("[ddg] Triggering status request manually via JS...")
-            await page.evaluate("""
-                fetch('https://duckduckgo.com/duckchat/v1/status', {
-                    headers: {'x-vqd-accept': '1'}
+        # Execute chat request via fetch() inside the browser — 
+        # this means DDG's JS challenge runs natively
+        result = await page.evaluate("""
+            async ([chatUrl, model, messages]) => {
+                // Step 1: get VQD token + hash via status endpoint
+                const statusResp = await fetch('https://duckduckgo.com/duckchat/v1/status', {
+                    headers: {
+                        'accept': 'text/event-stream',
+                        'accept-language': 'en-US,en;q=0.9',
+                        'cache-control': 'no-cache',
+                        'content-type': 'application/json',
+                        'pragma': 'no-cache',
+                        'x-vqd-accept': '1'
+                    }
                 });
-            """)
-            await asyncio.wait_for(event.wait(), timeout=10)
 
-        if not vqd_token and not vqd_hash:
-            raise ValueError("Browser intercepted status response but found no VQD tokens")
+                const vqd4   = statusResp.headers.get('x-vqd-4') || '';
+                const hash1  = statusResp.headers.get('x-vqd-hash-1') || '';
 
-        return vqd_token or "", vqd_hash or ""
+                if (!vqd4 && !hash1) {
+                    return {error: 'No VQD token from status endpoint'};
+                }
+
+                // Step 2: send chat request
+                const chatHeaders = {
+                    'accept': 'text/event-stream',
+                    'accept-language': 'en-US,en;q=0.9',
+                    'cache-control': 'no-cache',
+                    'content-type': 'application/json',
+                    'pragma': 'no-cache',
+                    'origin': 'https://duckduckgo.com',
+                    'referer': 'https://duckduckgo.com/'
+                };
+                if (vqd4)  chatHeaders['x-vqd-4']      = vqd4;
+                if (hash1) chatHeaders['x-vqd-hash-1'] = hash1;
+
+                const chatResp = await fetch(chatUrl, {
+                    method: 'POST',
+                    headers: chatHeaders,
+                    body: JSON.stringify({model, messages})
+                });
+
+                if (!chatResp.ok) {
+                    const txt = await chatResp.text();
+                    return {error: `HTTP ${chatResp.status}: ${txt.slice(0, 300)}`};
+                }
+
+                // Step 3: read SSE stream and collect message chunks
+                const text = await chatResp.text();
+                const parts = [];
+                for (const line of text.split('\\n')) {
+                    if (!line.startsWith('data: ')) continue;
+                    const chunk = line.slice(6).trim();
+                    if (chunk === '[DONE]' || chunk === '') continue;
+                    try {
+                        const obj = JSON.parse(chunk);
+                        if (obj.message) parts.push(obj.message);
+                    } catch(e) {}
+                }
+                return {result: parts.join('')};
+            }
+        """, [DDG_CHAT_URL, model, messages])
+
+        if result.get("error"):
+            raise ValueError(result["error"])
+
+        text = result.get("result", "").strip()
+        if not text:
+            raise ValueError("Empty response from DuckDuckGo")
+        return text
 
     finally:
         await page.close()
         await context.close()
 
 
-async def _get_tokens(force_refresh: bool = False) -> tuple[str, str]:
-    """Return cached tokens, or fetch fresh ones if expired."""
-    async with _token_lock:
-        now = time.time()
-        if not force_refresh and _token_cache["expires"] > now and (
-            _token_cache["vqd"] or _token_cache["hash"]
-        ):
-            return _token_cache["vqd"], _token_cache["hash"]
-
-        print("[ddg] Fetching fresh VQD tokens via browser...")
-        vqd, vqd_hash = await _fetch_token_via_browser()
-        _token_cache.update({"vqd": vqd, "hash": vqd_hash, "expires": now + TOKEN_TTL})
-        return vqd, vqd_hash
-
-
-async def _do_chat(model: str, messages: list, force_refresh: bool = False) -> str:
-    """Perform one chat request using cached tokens."""
-    vqd, vqd_hash = await _get_tokens(force_refresh=force_refresh)
-
-    headers = {**HEADERS_BASE}
-    if vqd:
-        headers["x-vqd-4"] = vqd
-    if vqd_hash:
-        headers["x-vqd-hash-1"] = vqd_hash
-
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            DDG_CHAT_URL,
-            headers=headers,
-            content=json.dumps({"model": model, "messages": messages}),
-            timeout=60,
-        )
-
-    if resp.status_code in (418, 403):
-        raise ValueError(f"CHALLENGE:{resp.status_code}")   # triggers token refresh
-
-    if resp.status_code == 429:
-        raise ValueError("RateLimit: DuckDuckGo rate limit hit")
-
-    if resp.status_code != 200:
-        raise ValueError(f"DDG chat returned HTTP {resp.status_code}: {resp.text[:300]}")
-
-    # Parse SSE stream
-    result_parts = []
-    for line in resp.text.splitlines():
-        if not line.startswith("data: "):
-            continue
-        chunk = line[6:].strip()
-        if chunk in ("[DONE]", ""):
-            continue
-        try:
-            obj = json.loads(chunk)
-            msg = obj.get("message", "")
-            if msg:
-                result_parts.append(msg)
-        except json.JSONDecodeError:
-            continue
-
-    full = "".join(result_parts).strip()
-    if not full:
-        raise ValueError("Empty response from DuckDuckGo")
-    return full
-
-
 async def ask(prompt: str, model: str = "auto", history: list | None = None) -> str:
     ddg_model = _resolve_model(model)
     messages  = _build_messages(prompt, history)
 
-    last_error  = None
-    force_refresh = False
-
+    last_error = None
     for attempt in range(MAX_RETRIES):
         try:
-            return await _do_chat(ddg_model, messages, force_refresh=force_refresh)
+            return await _chat_in_browser(ddg_model, messages)
         except Exception as e:
             last_error = e
-            err_str = str(e).lower()
-
-            if "challenge" in err_str or "418" in err_str or "403" in err_str:
-                # Token rejected — force browser refresh
-                print(f"[ddg] Token rejected (attempt {attempt+1}), refreshing via browser...")
-                force_refresh = True
-                await asyncio.sleep(2)
-                continue
-
-            if "ratelimit" in err_str or "429" in err_str:
-                await asyncio.sleep(2 ** attempt)
-                continue
-
+            print(f"[ddg] attempt {attempt+1} failed: {e}")
             if attempt < MAX_RETRIES - 1:
-                await asyncio.sleep(1)
-                continue
-            break
+                await asyncio.sleep(2 ** attempt)
+            continue
 
     raise ValueError(f"DuckDuckGo AI failed after {MAX_RETRIES} attempts: {last_error}")
 
