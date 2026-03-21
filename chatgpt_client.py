@@ -1,7 +1,7 @@
 """
 DuckDuckGo AI Chat Client
-- Calls DDG API directly with httpx (no ddgs/duckduckgo_search library needed)
-- Handles x-vqd-4 token automatically
+- Calls DDG API directly with httpx (no external library needed)
+- Handles x-vqd-4 AND x-vqd-hash-1 tokens automatically
 - Retry logic for rate limits and token errors
 """
 import asyncio
@@ -36,13 +36,16 @@ MAX_RETRIES = 3
 DDG_STATUS_URL = "https://duckduckgo.com/duckchat/v1/status"
 DDG_CHAT_URL   = "https://duckduckgo.com/duckchat/v1/chat"
 
+# Updated headers matching current Chrome browser requests
 HEADERS_BASE = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Accept": "text/event-stream",
+    "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                       "(KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+    "Accept":          "text/event-stream",
     "Accept-Language": "en-US,en;q=0.9",
-    "Origin": "https://duckduckgo.com",
-    "Referer": "https://duckduckgo.com/",
+    "Cache-Control":   "no-cache",
+    "Pragma":          "no-cache",
+    "Origin":          "https://duckduckgo.com",
+    "Referer":         "https://duckduckgo.com/",
 }
 
 
@@ -59,26 +62,45 @@ def _build_messages(prompt: str, history: list | None) -> list:
     return messages
 
 
-async def _get_vqd_token(client: httpx.AsyncClient, model: str) -> str:
+async def _get_vqd_tokens(client: httpx.AsyncClient) -> tuple[str, str]:
+    """Fetch x-vqd-4 token and x-vqd-hash-1 from DDG status endpoint."""
     resp = await client.get(
         DDG_STATUS_URL,
-        headers={**HEADERS_BASE, "x-vqd-accept": "1"},
-        params={"chat": model},
-        timeout=10,
+        headers={
+            **HEADERS_BASE,
+            "Content-Type": "application/json",
+            "x-vqd-accept": "1",
+        },
+        timeout=15,
     )
-    token = resp.headers.get("x-vqd-4", "")
-    if not token:
-        raise ValueError("Could not get x-vqd-4 token from DuckDuckGo")
-    return token
+    vqd_token = resp.headers.get("x-vqd-4", "")
+    vqd_hash  = resp.headers.get("x-vqd-hash-1", "")
+
+    if not vqd_token:
+        raise ValueError(
+            f"Could not get x-vqd-4 token from DuckDuckGo "
+            f"(status={resp.status_code}, headers={dict(resp.headers)})"
+        )
+    return vqd_token, vqd_hash
 
 
 async def _do_chat(client: httpx.AsyncClient, model: str, messages: list) -> str:
-    vqd_token = await _get_vqd_token(client, model)
+    """Perform one chat request, returns the full response text."""
+    vqd_token, vqd_hash = await _get_vqd_tokens(client)
+
+    chat_headers = {
+        **HEADERS_BASE,
+        "Content-Type": "application/json",
+        "x-vqd-4":      vqd_token,
+    }
+    if vqd_hash:
+        chat_headers["x-vqd-hash-1"] = vqd_hash
+
     payload = {"model": model, "messages": messages}
 
     resp = await client.post(
         DDG_CHAT_URL,
-        headers={**HEADERS_BASE, "Content-Type": "application/json", "x-vqd-4": vqd_token},
+        headers=chat_headers,
         content=json.dumps(payload),
         timeout=60,
     )
@@ -86,8 +108,9 @@ async def _do_chat(client: httpx.AsyncClient, model: str, messages: list) -> str
     if resp.status_code == 429:
         raise ValueError("RateLimit: DuckDuckGo rate limit hit")
     if resp.status_code != 200:
-        raise ValueError(f"DDG returned HTTP {resp.status_code}: {resp.text[:200]}")
+        raise ValueError(f"DDG returned HTTP {resp.status_code}: {resp.text[:300]}")
 
+    # Parse SSE stream: data: {"message": "..."}
     result_parts = []
     for line in resp.text.splitlines():
         if not line.startswith("data: "):
@@ -110,6 +133,10 @@ async def _do_chat(client: httpx.AsyncClient, model: str, messages: list) -> str
 
 
 async def ask(prompt: str, model: str = "auto", history: list | None = None) -> str:
+    """
+    Send a prompt to DuckDuckGo AI Chat and return the full response.
+    Calls the DDG API directly — no external library required.
+    """
     ddg_model = _resolve_model(model)
     messages  = _build_messages(prompt, history)
 
@@ -122,7 +149,7 @@ async def ask(prompt: str, model: str = "auto", history: list | None = None) -> 
             last_error = e
             err_str = str(e).lower()
             if "ratelimit" in err_str or "429" in err_str or "vqd" in err_str:
-                await asyncio.sleep(2 ** attempt)
+                await asyncio.sleep(2 ** attempt)   # 1s, 2s, 4s
                 continue
             if attempt < MAX_RETRIES - 1:
                 await asyncio.sleep(1)
