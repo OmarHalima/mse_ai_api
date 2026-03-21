@@ -5,8 +5,7 @@ colorFrom: purple
 colorTo: blue
 sdk: docker
 pinned: true
-short_description: Free OpenAI-compatible API via DuckDuckGo AI — No login needed
----
+short_description: Free OpenAI API via DuckDuckGo — No login needed
 
 # ⚡ mse_ai_api — Free OpenAI-Compatible API
 
