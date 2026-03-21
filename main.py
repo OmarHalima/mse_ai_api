@@ -30,13 +30,17 @@ DASHBOARD_PIN     = os.getenv("DASHBOARD_PIN", "281020")
 _sessions: dict[str, float] = {}
 SESSION_TTL = 8 * 3600  # 8 hours
 
-app = FastAPI(title="mse_ai_api", version="2.0.0", docs_url="/docs", redoc_url=None)
-templates = Jinja2Templates(directory="templates")
+from contextlib import asynccontextmanager
 
 
-@app.on_event("startup")
-async def on_startup():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     asyncio.create_task(keepalive.start_keepalive())
+    yield
+
+
+app = FastAPI(title="mse_ai_api", version="2.0.0", docs_url="/docs", redoc_url=None, lifespan=lifespan)
+templates = Jinja2Templates(directory="templates")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
