@@ -27,17 +27,15 @@ A production-ready **FastAPI** server powered by **DuckDuckGo AI Chat** — no l
 
 | Model ID | Name |
 |---|---|
-| `gpt-5-mini` | GPT-5 mini ⭐ default |
+| `gpt-5-mini` | GPT-5 mini default |
 | `gpt-4o-mini` | GPT-4o mini |
 | `gpt-oss-120b` | GPT-OSS 120B |
 | `llama-4-scout` | Llama 4 Scout |
 | `claude-haiku-4.5` | Claude Haiku 4.5 |
 | `mistral-small-3` | Mistral Small 3 |
 
-## 🔌 Usage
+## API Usage
 
-```bash
-curl -X POST https://YOUR-SPACE.hf.space/v1/chat/completions \
-  -H "Authorization: Bearer change-secret-key-2026" \
-  -H "Content-Type: application/json" \
-  -d '{"model": "gpt-5-mini", "messages": [{"role": "user", "content": "Hello!"}]}'
+Base URL: `https://nopoh22-mse-ai-api.hf.space/v1`
+
+Header: `Authorization: Bearer YOUR_API_SECRET_KEY`
