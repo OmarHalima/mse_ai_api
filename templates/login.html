@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>تسجيل الدخول — mse_ai_api</title>
+<style>
+  :root {
+    --bg:#0f1117;--card:#1a1d27;--border:#2a2d3e;
+    --accent:#6c63ff;--red:#ef4444;--text:#e2e8f0;--muted:#64748b;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{background:var(--bg);color:var(--text);font-family:'Segoe UI',Tahoma,sans-serif;
+       min-height:100vh;display:flex;align-items:center;justify-content:center;}
+  .box{background:var(--card);border:1px solid var(--border);border-radius:16px;
+       padding:40px 36px;width:100%;max-width:360px;text-align:center;}
+  .logo{font-size:2rem;margin-bottom:6px;}
+  .title{font-size:1.2rem;font-weight:700;color:var(--accent);margin-bottom:4px;}
+  .sub{font-size:.82rem;color:var(--muted);margin-bottom:28px;}
+  label{display:block;text-align:right;font-size:.82rem;color:var(--muted);margin-bottom:6px;}
+  input[type=password]{
+    width:100%;background:var(--bg);border:1px solid var(--border);
+    color:var(--text);border-radius:8px;padding:12px 14px;font-size:1.1rem;
+    letter-spacing:6px;text-align:center;outline:none;transition:border .2s;
+  }
+  input[type=password]:focus{border-color:var(--accent);}
+  .btn{
+    width:100%;margin-top:18px;background:var(--accent);color:#fff;
+    border:none;border-radius:8px;padding:12px;font-size:1rem;
+    cursor:pointer;transition:opacity .2s;
+  }
+  .btn:hover{opacity:.85;}
+  .error{
+    background:rgba(239,68,68,.12);border:1px solid var(--red);
+    color:var(--red);border-radius:8px;padding:10px 14px;
+    font-size:.85rem;margin-bottom:16px;
+  }
+  .pin-dots{display:flex;justify-content:center;gap:10px;margin:16px 0 4px;}
+  .dot{width:12px;height:12px;border-radius:50%;background:var(--border);transition:.2s;}
+  .dot.filled{background:var(--accent);}
+</style>
+</head>
+<body>
+<div class="box">
+  <div class="logo">⚡</div>
+  <div class="title">mse_ai_api</div>
+  <div class="sub">لوحة التحكم — أدخل الرقم السري للدخول</div>
+
+  {% if error %}
+  <div class="error">{{ error }}</div>
+  {% endif %}
+
+  <form method="post" action="/login" id="loginForm">
+    <label>الرقم السري</label>
+    <div class="pin-dots" id="dots">
+      <div class="dot" id="d0"></div>
+      <div class="dot" id="d1"></div>
+      <div class="dot" id="d2"></div>
+      <div class="dot" id="d3"></div>
+      <div class="dot" id="d4"></div>
+      <div class="dot" id="d5"></div>
+    </div>
+    <input type="password" name="pin" id="pinInput" maxlength="6"
+           placeholder="••••••" autocomplete="current-password"
+           inputmode="numeric" pattern="[0-9]*"/>
+    <button type="submit" class="btn">دخول →</button>
+  </form>
+</div>
+
+<script>
+const input = document.getElementById('pinInput');
+const dots  = document.querySelectorAll('.dot');
+
+input.addEventListener('input', () => {
+  const len = input.value.length;
+  dots.forEach((d, i) => d.classList.toggle('filled', i < len));
+});
+
+// Auto-submit when 6 digits entered
+input.addEventListener('input', () => {
+  if (input.value.length === 6) {
+    setTimeout(() => document.getElementById('loginForm').submit(), 200);
+  }
+});
+
+input.focus();
+</script>
+</body>
+</html>
