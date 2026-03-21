@@ -5,15 +5,8 @@ DuckDuckGo AI Chat Client
 - Retry logic for rate limits and token errors
 """
 import asyncio
-import warnings
 
-# Support both old and new package names
-try:
-    from ddgs import DDGS
-except ImportError:
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        from duckduckgo_search import DDGS
+from ddgs import DDGS  # pip install ddgs>=7.0.0
 
 # ── Model name mapping ────────────────────────────────────────────────────────
 MODEL_MAP = {
@@ -77,7 +70,7 @@ async def ask(prompt: str, model: str = "auto", history: list | None = None) -> 
     for attempt in range(MAX_RETRIES):
         try:
             # DDGS.chat() is synchronous — run in thread pool to avoid blocking
-            result = await asyncio.get_event_loop().run_in_executor(
+            result = await asyncio.get_running_loop().run_in_executor(
                 None,
                 lambda: DDGS().chat(full_prompt, model=ddg_model)
             )
