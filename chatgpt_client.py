@@ -1,7 +1,7 @@
 """
 DuckDuckGo AI Chat Client
 - Calls DDG API directly with httpx (no external library needed)
-- Handles x-vqd-4 AND x-vqd-hash-1 tokens automatically
+- Uses x-vqd-hash-1 token (DDG removed x-vqd-4 in 2026)
 - Retry logic for rate limits and token errors
 """
 import asyncio
@@ -36,7 +36,6 @@ MAX_RETRIES = 3
 DDG_STATUS_URL = "https://duckduckgo.com/duckchat/v1/status"
 DDG_CHAT_URL   = "https://duckduckgo.com/duckchat/v1/chat"
 
-# Updated headers matching current Chrome browser requests
 HEADERS_BASE = {
     "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                        "(KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
@@ -46,6 +45,7 @@ HEADERS_BASE = {
     "Pragma":          "no-cache",
     "Origin":          "https://duckduckgo.com",
     "Referer":         "https://duckduckgo.com/",
+    "Content-Type":    "application/json",
 }
 
 
@@ -62,53 +62,47 @@ def _build_messages(prompt: str, history: list | None) -> list:
     return messages
 
 
-async def _get_vqd_tokens(client: httpx.AsyncClient) -> tuple[str, str]:
-    """Fetch x-vqd-4 token and x-vqd-hash-1 from DDG status endpoint."""
+async def _get_vqd_hash(client: httpx.AsyncClient) -> str:
+    """
+    Fetch x-vqd-hash-1 from DDG status endpoint.
+    DDG removed x-vqd-4 in 2026 — the hash is now the only required token.
+    """
     resp = await client.get(
         DDG_STATUS_URL,
-        headers={
-            **HEADERS_BASE,
-            "Content-Type": "application/json",
-            "x-vqd-accept": "1",
-        },
+        headers={**HEADERS_BASE, "x-vqd-accept": "1"},
         timeout=15,
     )
-    vqd_token = resp.headers.get("x-vqd-4", "")
-    vqd_hash  = resp.headers.get("x-vqd-hash-1", "")
 
-    if not vqd_token:
+    # Try x-vqd-hash-1 first (new), then x-vqd-4 (legacy fallback)
+    token = resp.headers.get("x-vqd-hash-1") or resp.headers.get("x-vqd-4")
+
+    if not token:
         raise ValueError(
-            f"Could not get x-vqd-4 token from DuckDuckGo "
-            f"(status={resp.status_code}, headers={dict(resp.headers)})"
+            f"No VQD token in DDG response "
+            f"(status={resp.status_code}, "
+            f"available_headers={[k for k in resp.headers if 'vqd' in k.lower()]})"
         )
-    return vqd_token, vqd_hash
+    return token
 
 
 async def _do_chat(client: httpx.AsyncClient, model: str, messages: list) -> str:
     """Perform one chat request, returns the full response text."""
-    vqd_token, vqd_hash = await _get_vqd_tokens(client)
-
-    chat_headers = {
-        **HEADERS_BASE,
-        "Content-Type": "application/json",
-        "x-vqd-4":      vqd_token,
-    }
-    if vqd_hash:
-        chat_headers["x-vqd-hash-1"] = vqd_hash
-
-    payload = {"model": model, "messages": messages}
+    vqd_hash = await _get_vqd_hash(client)
 
     resp = await client.post(
         DDG_CHAT_URL,
-        headers=chat_headers,
-        content=json.dumps(payload),
+        headers={
+            **HEADERS_BASE,
+            "x-vqd-hash-1": vqd_hash,
+        },
+        content=json.dumps({"model": model, "messages": messages}),
         timeout=60,
     )
 
     if resp.status_code == 429:
         raise ValueError("RateLimit: DuckDuckGo rate limit hit")
     if resp.status_code != 200:
-        raise ValueError(f"DDG returned HTTP {resp.status_code}: {resp.text[:300]}")
+        raise ValueError(f"DDG chat returned HTTP {resp.status_code}: {resp.text[:300]}")
 
     # Parse SSE stream: data: {"message": "..."}
     result_parts = []
@@ -133,10 +127,6 @@ async def _do_chat(client: httpx.AsyncClient, model: str, messages: list) -> str
 
 
 async def ask(prompt: str, model: str = "auto", history: list | None = None) -> str:
-    """
-    Send a prompt to DuckDuckGo AI Chat and return the full response.
-    Calls the DDG API directly — no external library required.
-    """
     ddg_model = _resolve_model(model)
     messages  = _build_messages(prompt, history)
 
