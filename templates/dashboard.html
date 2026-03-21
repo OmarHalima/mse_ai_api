@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>mse_ai_api - لوحة التحكم</title>
+<style>
+  :root {
+    --bg:#0f1117;--card:#1a1d27;--border:#2a2d3e;
+    --accent:#6c63ff;--green:#22c55e;--red:#ef4444;
+    --yellow:#f59e0b;--text:#e2e8f0;--muted:#64748b;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{background:var(--bg);color:var(--text);font-family:'Segoe UI',Tahoma,sans-serif;min-height:100vh;}
+  nav{background:var(--card);border-bottom:1px solid var(--border);padding:14px 28px;
+      display:flex;align-items:center;justify-content:space-between;}
+  nav .logo{font-size:1.3rem;font-weight:700;color:var(--accent);}
+  nav .badge{background:var(--accent);color:#fff;font-size:.7rem;padding:3px 10px;border-radius:20px;}
+  .container{max-width:1100px;margin:0 auto;padding:28px 20px;}
+  .grid-4{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;margin-bottom:28px;}
+  .stat-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px;}
+  .stat-card .label{font-size:.8rem;color:var(--muted);margin-bottom:8px;}
+  .stat-card .value{font-size:1.8rem;font-weight:700;}
+  .value.green{color:var(--green);} .value.red{color:var(--red);} .value.accent{color:var(--accent);}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:24px;margin-bottom:24px;}
+  .card h2{font-size:1rem;margin-bottom:18px;color:var(--accent);}
+  .status-row{display:flex;align-items:center;gap:10px;margin-bottom:12px;}
+  .dot{width:10px;height:10px;border-radius:50%;}
+  .dot.green{background:var(--green);box-shadow:0 0 8px var(--green);}
+  .dot.red{background:var(--red);box-shadow:0 0 8px var(--red);}
+  .form-group{margin-bottom:16px;}
+  label{display:block;font-size:.85rem;color:var(--muted);margin-bottom:6px;}
+  input[type=text],input[type=password],textarea,select{
+    width:100%;background:var(--bg);border:1px solid var(--border);
+    color:var(--text);border-radius:8px;padding:10px 14px;font-size:.9rem;outline:none;transition:border .2s;}
+  input:focus,textarea:focus,select:focus{border-color:var(--accent);}
+  textarea{resize:vertical;min-height:70px;font-family:monospace;font-size:.85rem;}
+  select option{background:var(--card);}
+  .btn{background:var(--accent);color:#fff;border:none;border-radius:8px;
+       padding:10px 24px;cursor:pointer;font-size:.9rem;transition:opacity .2s;}
+  .btn:hover{opacity:.85;} .btn:disabled{opacity:.5;cursor:not-allowed;}
+  #test-response{background:var(--bg);border:1px solid var(--border);border-radius:8px;
+                 padding:14px;min-height:80px;font-family:monospace;font-size:.85rem;
+                 white-space:pre-wrap;word-break:break-word;margin-top:12px;color:var(--green);}
+  table{width:100%;border-collapse:collapse;font-size:.82rem;}
+  th{text-align:right;padding:10px 12px;color:var(--muted);border-bottom:1px solid var(--border);}
+  td{padding:9px 12px;border-bottom:1px solid var(--border);}
+  tr:last-child td{border-bottom:none;}
+  tr:hover td{background:rgba(108,99,255,.05);}
+  .code-box{background:var(--bg);border:1px solid var(--border);border-radius:8px;
+            padding:14px;font-family:monospace;font-size:.82rem;overflow-x:auto;margin-bottom:12px;}
+  .alert{padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:.88rem;display:none;}
+  .alert.success{background:rgba(34,197,94,.15);border:1px solid var(--green);color:var(--green);}
+  .alert.error{background:rgba(239,68,68,.15);border:1px solid var(--red);color:var(--red);}
+  .tabs{display:flex;gap:4px;margin-bottom:20px;flex-wrap:wrap;}
+  .tab{padding:8px 18px;border-radius:8px;cursor:pointer;font-size:.88rem;
+       background:var(--border);color:var(--muted);border:none;transition:.2s;}
+  .tab.active{background:var(--accent);color:#fff;}
+  .model-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-bottom:16px;}
+  .model-card{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px;font-size:.82rem;}
+  .model-card .mname{font-weight:600;color:var(--text);margin-bottom:4px;}
+  .model-card .mprov{color:var(--muted);}
+  @media(max-width:600px){.grid-4{grid-template-columns:1fr 1fr;}}
+</style>
+</head>
+<body>
+<nav>
+  <span class="logo">⚡ mse_ai_api</span>
+  <span class="badge">DDG Backend • No Login</span>
+</nav>
+
+<div class="container">
+  <div class="alert" id="alert"></div>
+
+  <!-- Stats -->
+  <div class="grid-4">
+    <div class="stat-card"><div class="label">إجمالي الطلبات</div><div class="value accent" id="s-total">-</div></div>
+    <div class="stat-card"><div class="label">ناجح</div><div class="value green" id="s-ok">-</div></div>
+    <div class="stat-card"><div class="label">أخطاء</div><div class="value red" id="s-err">-</div></div>
+    <div class="stat-card"><div class="label">إجمالي التوكنز</div><div class="value accent" id="s-tok">-</div></div>
+    <div class="stat-card"><div class="label">وقت التشغيل</div><div class="value" id="s-up">-</div></div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <button class="tab active" onclick="showTab('status')">الحالة</button>
+    <button class="tab" onclick="showTab('test')">اختبار</button>
+    <button class="tab" onclick="showTab('settings')">الإعدادات</button>
+    <button class="tab" onclick="showTab('logs')">السجلات</button>
+    <button class="tab" onclick="showTab('api')">API Docs</button>
+  </div>
+
+  <!-- Status -->
+  <div id="tab-status">
+    <div class="card">
+      <h2>حالة الخدمة</h2>
+      <div class="status-row">
+        <div class="dot green" id="srv-dot"></div>
+        <span id="srv-text">الخادم يعمل بشكل طبيعي</span>
+      </div>
+      <div class="status-row">
+        <div class="dot green"></div>
+        <span>DuckDuckGo AI — لا يحتاج تسجيل دخول ✓</span>
+      </div>
+      <div class="status-row">
+        <div class="dot green"></div>
+        <span>يعمل على PythonAnywhere ✓</span>
+      </div>
+    </div>
+    <div class="card">
+      <h2>النماذج المتاحة</h2>
+      <div class="model-grid" id="models-grid">
+        <div class="model-card"><div class="mname">⭐ gpt-5-mini</div><div class="mprov">OpenAI via DDG — الافتراضي</div></div>
+        <div class="model-card"><div class="mname">gpt-4o-mini</div><div class="mprov">OpenAI via DDG</div></div>
+        <div class="model-card"><div class="mname">gpt-oss-120b</div><div class="mprov">OpenAI via DDG — Open Source</div></div>
+        <div class="model-card"><div class="mname">llama-4-scout</div><div class="mprov">Meta via DDG</div></div>
+        <div class="model-card"><div class="mname">claude-haiku-4.5</div><div class="mprov">Anthropic via DDG</div></div>
+        <div class="model-card"><div class="mname">mistral-small-3</div><div class="mprov">Mistral via DDG</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Test -->
+  <div id="tab-test" style="display:none">
+    <div class="card">
+      <h2>🧪 اختبار مباشر</h2>
+      <div class="form-group">
+        <label>النموذج</label>
+        <select id="test-model">
+          <option value="gpt-5-mini">⭐ GPT-5 mini (الافتراضي)</option>
+          <option value="gpt-4o-mini">GPT-4o mini</option>
+          <option value="gpt-oss-120b">GPT-OSS 120B</option>
+          <option value="llama-4-scout">Llama 4 Scout</option>
+          <option value="claude-haiku-4.5">Claude Haiku 4.5</option>
+          <option value="mistral-small-3">Mistral Small 3</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>رسالتك</label>
+        <textarea id="test-prompt" placeholder="اكتب سؤالك هنا..."></textarea>
+      </div>
+      <button class="btn" onclick="runTest()" id="test-btn">▶ إرسال</button>
+      <div id="test-response">الرد سيظهر هنا...</div>
+    </div>
+  </div>
+
+  <!-- Settings -->
+  <div id="tab-settings" style="display:none">
+    <div class="card">
+      <h2>⚙️ إعدادات الـ API</h2>
+      <div class="form-group">
+        <label>API Secret Key (مفتاح حماية الـ API)</label>
+        <input type="text" id="inp-apikey" placeholder="change-secret-key-2026"/>
+      </div>
+      <button class="btn" onclick="saveSettings()">💾 حفظ</button>
+    </div>
+  </div>
+
+  <!-- Logs -->
+  <div id="tab-logs" style="display:none">
+    <div class="card">
+      <h2>📋 آخر الطلبات</h2>
+      <table>
+        <thead><tr><th>الوقت</th><th>النموذج</th><th>توكنز الإدخال</th><th>توكنز الإخراج</th><th>الحالة</th><th>خطأ</th></tr></thead>
+        <tbody id="logs-body"><tr><td colspan="6" style="text-align:center;color:var(--muted)">لا توجد بيانات بعد</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- API Docs -->
+  <div id="tab-api" style="display:none">
+    <div class="card">
+      <h2>📡 توثيق الـ API</h2>
+      <p style="margin-bottom:12px;font-size:.88rem;color:var(--muted)">Base URL: <strong id="base-url" style="color:var(--text)"></strong></p>
+
+      <p style="margin-bottom:8px;font-size:.88rem;color:var(--muted)">POST /v1/chat/completions</p>
+      <div class="code-box"><pre>{
+  "model": "gpt-4o-mini",
+  "messages": [
+    {"role": "user", "content": "مرحبا!"}
+  ]
+}</pre></div>
+
+      <p style="margin-bottom:8px;font-size:.88rem;color:var(--muted)">Headers:</p>
+      <div class="code-box">Authorization: Bearer YOUR_API_SECRET_KEY
+Content-Type: application/json</div>
+
+      <p style="margin:16px 0 8px;font-size:.88rem;color:var(--muted)">إعداد n8n (OpenAI Node):</p>
+      <div class="code-box">Base URL: <span id="n8n-url"></span>
+API Key: YOUR_API_SECRET_KEY</div>
+
+      <p style="margin:16px 0 8px;font-size:.88rem;color:var(--muted)">النماذج المتاحة:</p>
+      <div class="code-box">gpt-5-mini | gpt-4o-mini | gpt-oss-120b | llama-4-scout | claude-haiku-4.5 | mistral-small-3</div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const BASE = window.location.origin;
+document.getElementById('base-url').textContent = BASE;
+document.getElementById('n8n-url').textContent = BASE + '/v1';
+
+function showTab(name) {
+  ['status','test','settings','logs','api'].forEach(t => {
+    document.getElementById('tab-'+t).style.display = t===name ? '' : 'none';
+  });
+  document.querySelectorAll('.tab').forEach((el,i) => {
+    el.classList.toggle('active', ['status','test','settings','logs','api'][i] === name);
+  });
+  if (name === 'logs') loadLogs();
+}
+
+function showAlert(msg, type='success') {
+  const el = document.getElementById('alert');
+  el.textContent = msg; el.className = 'alert '+type; el.style.display = 'block';
+  setTimeout(() => el.style.display='none', 4000);
+}
+
+async function loadStats() {
+  try {
+    const r = await fetch('/dashboard/stats');
+    const d = await r.json();
+    document.getElementById('s-total').textContent = d.total_requests;
+    document.getElementById('s-ok').textContent    = d.success;
+    document.getElementById('s-err').textContent   = d.errors;
+    document.getElementById('s-tok').textContent   = (d.total_tokens||0).toLocaleString();
+    document.getElementById('s-up').textContent    = d.uptime;
+  } catch(e) {
+    document.getElementById('srv-dot').className = 'dot red';
+    document.getElementById('srv-text').textContent = 'تعذر الاتصال بالخادم';
+  }
+}
+
+async function saveSettings() {
+  const apikey = document.getElementById('inp-apikey').value.trim();
+  const r = await fetch('/dashboard/credentials', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({api_key: apikey})
+  });
+  const d = await r.json();
+  if (r.ok) showAlert('تم الحفظ بنجاح ✓');
+  else showAlert(d.detail || 'حدث خطأ', 'error');
+}
+
+async function runTest() {
+  const prompt = document.getElementById('test-prompt').value.trim();
+  const model  = document.getElementById('test-model').value;
+  if (!prompt) return;
+  const btn = document.getElementById('test-btn');
+  btn.disabled = true; btn.textContent = '⏳ جاري الإرسال...';
+  document.getElementById('test-response').textContent = 'جاري الانتظار...';
+  try {
+    const r = await fetch('/dashboard/test', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({prompt, model})
+    });
+    const d = await r.json();
+    document.getElementById('test-response').textContent =
+      d.response || d.error || JSON.stringify(d);
+  } catch(e) {
+    document.getElementById('test-response').textContent = 'خطأ: ' + e.message;
+  }
+  btn.disabled = false; btn.textContent = '▶ إرسال';
+}
+
+async function loadLogs() {
+  const r = await fetch('/dashboard/stats');
+  const d = await r.json();
+  const tbody = document.getElementById('logs-body');
+  if (!d.recent || d.recent.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--muted)">لا توجد بيانات بعد</td></tr>';
+    return;
+  }
+  tbody.innerHTML = d.recent.map(row => `
+    <tr>
+      <td>${row.time}</td><td>${row.model}</td>
+      <td>${row.p_tokens}</td><td>${row.c_tokens}</td>
+      <td>${row.status}</td>
+      <td style="color:var(--red);font-size:.78rem">${row.error}</td>
+    </tr>`).join('');
+}
+
+loadStats();
+setInterval(loadStats, 10000);
+</script>
+</body>
+</html>
