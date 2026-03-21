@@ -14,10 +14,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python 3.10
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.10"
 
@@ -31,14 +31,14 @@ jobs:
           python -c "import keepalive; print('✅ keepalive OK')"
           python -c "from main import app; print('✅ main/FastAPI app OK')"
 
-      - name: Verify ddgs (not duckduckgo_search)
+      - name: Verify no ddgs/duckduckgo_search dependency
         run: |
-          python -c "from ddgs import DDGS; print('✅ ddgs package OK')"
           python -c "
           import pkg_resources
           pkgs = [p.project_name for p in pkg_resources.working_set]
-          assert 'duckduckgo-search' not in pkgs or True, '⚠️ old package present'
-          print('✅ package check OK')
+          assert 'ddgs' not in pkgs, '❌ ddgs should not be installed'
+          assert 'duckduckgo-search' not in pkgs, '❌ duckduckgo-search should not be installed'
+          print('✅ No DDG library dependency — using direct httpx calls')
           "
 
   # ── 2. Deploy to HuggingFace ──────────────────────────────────────────────────
@@ -50,7 +50,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
           lfs: true
