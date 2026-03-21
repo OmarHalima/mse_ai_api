@@ -30,15 +30,16 @@ jobs:
           python -c "import stats; print('✅ stats OK')"
           python -c "import keepalive; print('✅ keepalive OK')"
           python -c "from main import app; print('✅ main/FastAPI app OK')"
-          python -c "from duckai import DuckAI; print('✅ duckai OK')"
+          python -c "import httpx; print('✅ httpx OK')"
 
-      - name: Verify no playwright dependency
+      - name: Verify no playwright/duckai dependency
         run: |
           python -c "
           import pkg_resources
           pkgs = [p.project_name for p in pkg_resources.working_set]
           assert 'playwright' not in pkgs, '❌ playwright should not be installed'
-          print('✅ No Playwright — using duckai')
+          assert 'duckai' not in pkgs, '❌ duckai should not be installed'
+          print('✅ Clean deps — using httpx directly')
           "
 
   # ── 2. Deploy to HuggingFace ──────────────────────────────────────────────────
