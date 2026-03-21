@@ -5,7 +5,7 @@ DuckDuckGo AI Chat Client
 - Retry logic for rate limits and token errors
 """
 import asyncio
-from duckduckgo_search import DDGS
+from ddgs import DDGS
 
 # ── Model name mapping ────────────────────────────────────────────────────────
 MODEL_MAP = {
