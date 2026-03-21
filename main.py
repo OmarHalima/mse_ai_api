@@ -11,10 +11,11 @@ import time
 import json
 import re
 import asyncio
+import secrets
 from typing import Optional
 
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi import FastAPI, Request, Response, Cookie
+from fastapi.responses import JSONResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 import chatgpt_client as ai
@@ -22,7 +23,12 @@ import stats
 import keepalive
 
 # ── Config ────────────────────────────────────────────────────────────────────
-API_SECRET_KEY = os.getenv("API_SECRET_KEY", "change-secret-key-2026")
+API_SECRET_KEY    = os.getenv("API_SECRET_KEY", "change-secret-key-2026")
+DASHBOARD_PIN     = os.getenv("DASHBOARD_PIN", "281020")
+
+# In-memory session store  {token: expiry_timestamp}
+_sessions: dict[str, float] = {}
+SESSION_TTL = 8 * 3600  # 8 hours
 
 app = FastAPI(title="mse_ai_api", version="2.0.0", docs_url="/docs", redoc_url=None)
 templates = Jinja2Templates(directory="templates")
@@ -40,6 +46,30 @@ async def on_startup():
 def _check_auth(request: Request) -> bool:
     auth = request.headers.get("authorization", "")
     return auth.replace("Bearer ", "").strip() == API_SECRET_KEY
+
+
+# ── Session helpers ───────────────────────────────────────────────────────────
+
+def _create_session() -> str:
+    token = secrets.token_hex(32)
+    _sessions[token] = time.time() + SESSION_TTL
+    return token
+
+
+def _is_valid_session(token: str | None) -> bool:
+    if not token:
+        return False
+    expiry = _sessions.get(token)
+    if not expiry or time.time() > expiry:
+        _sessions.pop(token, None)
+        return False
+    return True
+
+
+def _require_dashboard_auth(request: Request):
+    """Returns True if request has a valid dashboard session cookie."""
+    token = request.cookies.get("dash_session")
+    return _is_valid_session(token)
 
 
 def _messages_to_prompt(messages: list) -> tuple[str, list]:
@@ -163,7 +193,11 @@ def _build_completion(data: dict, text: str, start: float, tool_calls=None) -> d
 # ══════════════════════════════════════════════════════════════════════════════
 
 @app.get("/")
-async def root():
+async def root(request: Request):
+    # Browsers get redirected to dashboard, API clients get JSON
+    accept = request.headers.get("accept", "")
+    if "text/html" in accept:
+        return RedirectResponse(url="/dashboard", status_code=302)
     return {"status": "running", "message": "mse_ai_api v2 (DDG backend)", "dashboard": "/dashboard"}
 
 
@@ -275,22 +309,62 @@ async def responses_api(request: Request):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# Dashboard Login
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request):
+    return templates.TemplateResponse("login.html", {"request": request, "error": ""})
+
+
+@app.post("/login")
+async def login_submit(request: Request):
+    form = await request.form()
+    pin = form.get("pin", "").strip()
+    if pin == DASHBOARD_PIN:
+        token = _create_session()
+        response = RedirectResponse(url="/dashboard", status_code=303)
+        response.set_cookie(
+            key="dash_session", value=token,
+            max_age=SESSION_TTL, httponly=True, samesite="lax"
+        )
+        return response
+    return templates.TemplateResponse(
+        "login.html",
+        {"request": request, "error": "رقم سري خاطئ، حاول مرة أخرى"},
+        status_code=401
+    )
+
+
+@app.get("/logout")
+async def logout():
+    response = RedirectResponse(url="/login", status_code=303)
+    response.delete_cookie("dash_session")
+    return response
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Dashboard
 # ══════════════════════════════════════════════════════════════════════════════
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request):
+    if not _require_dashboard_auth(request):
+        return RedirectResponse(url="/login", status_code=303)
     return templates.TemplateResponse("dashboard.html", {"request": request})
 
 
 @app.get("/dashboard/stats")
-async def dashboard_stats():
+async def dashboard_stats(request: Request):
+    if not _require_dashboard_auth(request):
+        return JSONResponse(status_code=401, content={"error": "Unauthorized"})
     return stats.get_stats()
 
 
 @app.post("/dashboard/credentials")
 async def dashboard_save_credentials(request: Request):
-    """Update API secret key from dashboard."""
+    if not _require_dashboard_auth(request):
+        return JSONResponse(status_code=401, content={"error": "Unauthorized"})
     try:
         data = await request.json()
     except Exception:
@@ -307,6 +381,8 @@ async def dashboard_save_credentials(request: Request):
 
 @app.post("/dashboard/test")
 async def dashboard_test(request: Request):
+    if not _require_dashboard_auth(request):
+        return JSONResponse(status_code=401, content={"error": "Unauthorized"})
     try:
         data = await request.json()
     except Exception:
