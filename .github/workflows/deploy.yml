@@ -24,12 +24,16 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Install Playwright browser
+        run: playwright install chromium --with-deps
+
       - name: Check imports & syntax
         run: |
           python -c "import chatgpt_client; print('✅ chatgpt_client OK')"
           python -c "import stats; print('✅ stats OK')"
           python -c "import keepalive; print('✅ keepalive OK')"
           python -c "from main import app; print('✅ main/FastAPI app OK')"
+          python -c "from playwright.async_api import async_playwright; print('✅ playwright OK')"
 
       - name: Verify no ddgs/duckduckgo_search dependency
         run: |
@@ -38,7 +42,7 @@ jobs:
           pkgs = [p.project_name for p in pkg_resources.working_set]
           assert 'ddgs' not in pkgs, '❌ ddgs should not be installed'
           assert 'duckduckgo-search' not in pkgs, '❌ duckduckgo-search should not be installed'
-          print('✅ No DDG library dependency — using direct httpx calls')
+          print('✅ No DDG library — using Playwright + httpx')
           "
 
   # ── 2. Deploy to HuggingFace ──────────────────────────────────────────────────
