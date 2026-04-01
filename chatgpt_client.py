@@ -257,10 +257,13 @@ async def ask(prompt: str, model: str = "auto", history: list | None = None) -> 
 
 
 def get_available_models() -> list[dict]:
+    """IDs must match dashboard + MODEL_MAP (n8n loads from GET /v1/models)."""
+    created = 1735689600
     return [
-        {"id": "gpt-4o-mini",      "name": "GPT-4o mini",       "provider": "OpenAI via DDG"},
-        {"id": "o3-mini",          "name": "o3-mini",           "provider": "OpenAI via DDG"},
-        {"id": "llama-3.3-70b",    "name": "Llama 3.3 70B",     "provider": "Meta via DDG"},
-        {"id": "claude-3-haiku",   "name": "Claude 3 Haiku",    "provider": "Anthropic via DDG"},
-        {"id": "mistral-small-3",  "name": "Mistral Small 3",   "provider": "Mistral via DDG"},
+        {"id": "gpt-5-mini",       "name": "GPT-5 mini (default)", "provider": "openai", "created": created},
+        {"id": "gpt-4o-mini",      "name": "GPT-4o mini",          "provider": "openai", "created": created},
+        {"id": "gpt-oss-120b",     "name": "GPT-OSS 120B",         "provider": "openai", "created": created},
+        {"id": "llama-4-scout",    "name": "Llama 4 Scout",      "provider": "meta",   "created": created},
+        {"id": "claude-haiku-4.5", "name": "Claude Haiku 4.5",    "provider": "anthropic", "created": created},
+        {"id": "mistral-small-3",  "name": "Mistral Small 3",     "provider": "mistral", "created": created},
     ]

@@ -121,10 +121,60 @@ def _messages_to_prompt(messages: list) -> tuple[str, list]:
     return prompt, history[:-1] if history else []
 
 
-def _is_degenerate_empty_tool_json(text: str) -> bool:
-    """LangChain/n8n often bind tools; the model may reply with only {\"tool_calls\": []}."""
-    t = text.strip()
-    return bool(re.fullmatch(r'\{\s*"tool_calls"\s*:\s*\[\s*\]\s*\}', t))
+def _effective_tools(data: dict) -> Optional[list]:
+    """
+    Only a non-empty JSON array counts as \"tools\". Empty [] is ignored so behaviour matches
+    the dashboard (plain chat). If n8n sends real tools, tool instructions are appended.
+    """
+    raw = data.get("tools")
+    if not isinstance(raw, list) or len(raw) == 0:
+        return None
+    return raw
+
+
+def _strip_degenerate_tool_json(text: str) -> str:
+    """If the entire reply is only an empty tool_calls JSON, treat as no content."""
+    if not text or not text.strip():
+        return text
+    raw = text.strip()
+    t = raw
+    if "```" in t:
+        m = re.search(r"```(?:json)?\s*\n?(.*?)\n?\s*```", t, re.DOTALL)
+        if m:
+            t = m.group(1).strip()
+    try:
+        o = json.loads(t)
+        if isinstance(o, dict) and "tool_calls" in o and o.get("tool_calls") == []:
+            if set(o.keys()) <= {"tool_calls"}:
+                return ""
+    except (json.JSONDecodeError, TypeError):
+        pass
+    if re.fullmatch(r'\{\s*"tool_calls"\s*:\s*\[\s*\]\s*\}', t):
+        return ""
+    return raw
+
+
+def _was_degenerate_tool_only(text: str) -> bool:
+    s = text.strip()
+    return bool(s) and _strip_degenerate_tool_json(text) == ""
+
+
+async def _ask_with_tool_fallback(
+    base_prompt: str,
+    history: list,
+    model: str,
+    tools_effective: Optional[list],
+) -> str:
+    """Match dashboard behaviour: plain chat unless real tools are bound."""
+    prompt = base_prompt + (_format_tools_instruction(tools_effective) if tools_effective else "")
+    text = await ai.ask(prompt, model=model, history=history)
+    if _was_degenerate_tool_only(text):
+        text = await ai.ask(base_prompt, model=model, history=history)
+    out = _strip_degenerate_tool_json(text)
+    if not out.strip():
+        text = await ai.ask(base_prompt, model=model, history=history)
+        out = _strip_degenerate_tool_json(text) or text.strip()
+    return out.strip() or "(Empty reply from model; try disabling Tools in the n8n OpenAI node.)"
 
 
 def _format_tools_instruction(tools: list) -> str:
@@ -223,7 +273,15 @@ async def list_models():
     models = ai.get_available_models()
     return {
         "object": "list",
-        "data": [{"id": m["id"], "object": "model", "owned_by": m["provider"]} for m in models]
+        "data": [
+            {
+                "id": m["id"],
+                "object": "model",
+                "created": m.get("created", 1735689600),
+                "owned_by": m["provider"],
+            }
+            for m in models
+        ],
     }
 
 
@@ -240,19 +298,18 @@ async def chat_completions(request: Request):
     if not messages:
         return JSONResponse(status_code=400, content={"error": {"message": "messages required"}})
 
-    tools = data.get("tools")
+    tools_effective = _effective_tools(data)
     model = data.get("model", "auto")
     start = time.time()
 
     try:
         base_prompt, history = _messages_to_prompt(messages)
-        prompt = base_prompt + (_format_tools_instruction(tools) if tools else "")
 
-        response_text = await ai.ask(prompt, model=model, history=history)
-        if tools and _is_degenerate_empty_tool_json(response_text):
-            response_text = await ai.ask(base_prompt, model=model, history=history)
+        response_text = await _ask_with_tool_fallback(
+            base_prompt, history, model, tools_effective
+        )
 
-        tool_calls = _parse_tool_calls(response_text) if tools else None
+        tool_calls = _parse_tool_calls(response_text) if tools_effective else None
         result = _build_completion(data, response_text, start, tool_calls)
         u = result["usage"]
         stats.record(True, u["prompt_tokens"], u["completion_tokens"], model)
@@ -286,20 +343,19 @@ async def responses_api(request: Request):
     if instructions:
         messages.insert(0, {"role": "system", "content": instructions})
 
-    tools = data.get("tools")
+    tools_effective = _effective_tools(data)
     model = data.get("model", "auto")
     start = time.time()
 
     try:
         base_prompt, history = _messages_to_prompt(messages)
-        prompt = base_prompt + (_format_tools_instruction(tools) if tools else "")
 
-        response_text = await ai.ask(prompt, model=model, history=history)
-        if tools and _is_degenerate_empty_tool_json(response_text):
-            response_text = await ai.ask(base_prompt, model=model, history=history)
+        response_text = await _ask_with_tool_fallback(
+            base_prompt, history, model, tools_effective
+        )
 
-        tool_calls = _parse_tool_calls(response_text) if tools else None
-        p_tok = max(1, len(prompt.split()))
+        tool_calls = _parse_tool_calls(response_text) if tools_effective else None
+        p_tok = max(1, len((base_prompt + (_format_tools_instruction(tools_effective) if tools_effective else "")).split()))
         c_tok = max(1, len(response_text.split()))
         stats.record(True, p_tok, c_tok, model)
 
