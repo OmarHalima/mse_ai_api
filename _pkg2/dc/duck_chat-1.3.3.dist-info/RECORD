@@ -1,0 +1,15 @@
+duck_chat/__init__.py,sha256=PktH-LOJVrxIjZed22rrWffSSDsmGgTV6uqp2FvvkY8,116
+duck_chat/__main__.py,sha256=XXlC4Ol0wZRbV30BZAqpmLpbrNR1T_sVmoghdQeDEl0,102
+duck_chat/api.py,sha256=wiftUjRQnuhsIEEtYOAyI9mB--oN8gSwEyKDCdRAX-0,7687
+duck_chat/cli.py,sha256=KTh1bv3Jmkx-rCAGoVY3eRkONZsFjmpTBb1FXuThY3o,6838
+duck_chat/exceptions.py,sha256=GqLGKFU_4ioYFaSORh7z8pvUjSkpo11IlodX0jhOPHU,363
+duck_chat/py.typed,sha256=dcrsqJrcYfTX-ckLFJMTaj6mD8aDe2u0tkQG-ZYxnEg,26
+duck_chat/models/__init__.py,sha256=aAd41m1pmZIm7-AjMxAfjiZ8X7ZoYqnJbKr6yp3wcT8,132
+duck_chat/models/generate_models.py,sha256=XFz186nr4KJAqWfMwR61bOYS-psuOkVQ-VryBkCdTpc,1999
+duck_chat/models/model_type.py,sha256=59vG_Xmxo0GDVW053bQMwRTMDfwy0B5xWbhPUb6QVpE,224
+duck_chat/models/models.py,sha256=I1dOYCvKCYOHieG7zoGMHC9l5Ef6J8I9XTEL3eusJDY,504
+duck_chat-1.3.3.dist-info/METADATA,sha256=OQjjVXBSiBlytDfL8Sot3QmlfC_c6VgcBTFDlVVb85E,4391
+duck_chat-1.3.3.dist-info/WHEEL,sha256=1yFddiXMmvYK7QYTqtRNtX66WJ0Mz8PYEiEUoOUUxRY,87
+duck_chat-1.3.3.dist-info/entry_points.txt,sha256=RRcC4Nn4g9ILf4Ai3XIleY0_HbqmVvTCz3gR6OoJVTU,61
+duck_chat-1.3.3.dist-info/licenses/LICENSE,sha256=nEXJ6-WTclemGPj0kRYunIFsmEVbmHz2JcpNLzxlXvo,1070
+duck_chat-1.3.3.dist-info/RECORD,,

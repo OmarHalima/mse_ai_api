@@ -1,9 +1,9 @@
 """
 mse_ai_api v2 - DuckDuckGo AI Backend
-- No login, no browser, no API key needed
+- No login, no API key; uses headless Chromium (Playwright) for DDG's JS challenge
 - OpenAI-compatible API (/v1/chat/completions, /v1/responses)
 - Web dashboard at /dashboard
-- Works on PythonAnywhere, VPS, Docker
+- Works on VPS, Docker (install Chromium via Playwright; see Dockerfile)
 """
 import os
 import uuid
@@ -37,6 +37,7 @@ from contextlib import asynccontextmanager
 async def lifespan(app: FastAPI):
     asyncio.create_task(keepalive.start_keepalive())
     yield
+    await ai.shutdown_playwright()
 
 
 app = FastAPI(title="mse_ai_api", version="2.0.0", docs_url="/docs", redoc_url=None, lifespan=lifespan)

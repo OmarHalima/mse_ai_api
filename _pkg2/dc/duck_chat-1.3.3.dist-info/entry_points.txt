@@ -1,0 +1,2 @@
+[console_scripts]
+duck_chat = duck_chat.cli:safe_entry_point
