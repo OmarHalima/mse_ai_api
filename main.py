@@ -21,6 +21,8 @@ from fastapi.templating import Jinja2Templates
 import chatgpt_client as ai
 import stats
 import keepalive
+import prompt_format
+from prompt_format import format_prompt, sanitize_assistant_content
 
 # ── Config ────────────────────────────────────────────────────────────────────
 API_SECRET_KEY    = os.getenv("API_SECRET_KEY", "change-secret-key-2026")
@@ -77,55 +79,28 @@ def _require_dashboard_auth(request: Request):
     return _is_valid_session(token)
 
 
-def _messages_to_prompt(messages: list) -> tuple[str, list]:
-    """
-    Convert OpenAI-style messages list into:
-    - A single prompt string (last user message)
-    - A history list for multi-turn context
-    """
-    history = []
-    prompt = ""
-    system_prefix = ""
-
-    for msg in messages:
-        role = msg.get("role", "")
-        content = msg.get("content", "")
-
-        # Flatten list content
-        if isinstance(content, list):
-            content = "\n".join(
-                item.get("text", str(item)) if isinstance(item, dict) else str(item)
-                for item in content
-            )
-
-        if role == "system":
-            system_prefix = content
-        elif role == "user":
-            prompt = content
-            if history or system_prefix:
-                history.append({"role": "user", "content": content})
-        elif role == "assistant":
-            history.append({"role": "assistant", "content": content})
-
-    # Prepend system message to first user message if present
-    if system_prefix and history:
-        for h in history:
-            if h["role"] == "user":
-                h["content"] = f"[System: {system_prefix}]\n\n{h['content']}"
-                break
-
-    # Final prompt = last user message (possibly with system prefix if no history)
-    if system_prefix and not history:
-        prompt = f"[System: {system_prefix}]\n\n{prompt}"
-
-    return prompt, history[:-1] if history else []
+def _sanitize_messages_list(messages: list) -> list:
+    """Strip degenerate assistant JSON so n8n history does not echo {\"tool_calls\": []}."""
+    out = []
+    for m in messages:
+        if not isinstance(m, dict):
+            out.append(m)
+            continue
+        mc = dict(m)
+        if mc.get("role") == "assistant" and isinstance(mc.get("content"), str):
+            mc["content"] = sanitize_assistant_content(mc["content"])
+        out.append(mc)
+    return out
 
 
 def _effective_tools(data: dict) -> Optional[list]:
     """
     Only a non-empty JSON array counts as \"tools\". Empty [] is ignored so behaviour matches
-    the dashboard (plain chat). If n8n sends real tools, tool instructions are appended.
+    the dashboard (plain chat). tool_choice: \"none\" disables tools (OpenAI / LangChain).
     """
+    tc = data.get("tool_choice")
+    if tc == "none" or (isinstance(tc, dict) and tc.get("type") == "none"):
+        return None
     raw = data.get("tools")
     if not isinstance(raw, list) or len(raw) == 0:
         return None
@@ -159,82 +134,43 @@ def _was_degenerate_tool_only(text: str) -> bool:
     return bool(s) and _strip_degenerate_tool_json(text) == ""
 
 
-async def _ask_with_tool_fallback(
-    base_prompt: str,
-    history: list,
+def _finalize_response_text(text: str) -> str:
+    t = _strip_degenerate_tool_json(text)
+    if not (t or "").strip():
+        return "(No assistant text; try tool_choice: none or disable Tools in n8n.)"
+    return t.strip()
+
+
+async def _complete_with_formatted_prompt(
+    messages: list,
     model: str,
     tools_effective: Optional[list],
 ) -> str:
-    """Match dashboard behaviour: plain chat unless real tools are bound."""
-    prompt = base_prompt + (_format_tools_instruction(tools_effective) if tools_effective else "")
-    text = await ai.ask(prompt, model=model, history=history)
-    if _was_degenerate_tool_only(text):
-        text = await ai.ask(base_prompt, model=model, history=history)
+    """Single linear prompt (LangChain/n8n) via prompt_format.format_prompt; history=None for DDG."""
+    formatted = format_prompt(messages, tools=tools_effective)
+    text = await ai.ask(formatted, model=model, history=None)
+    if _was_degenerate_tool_only(text) and tools_effective:
+        formatted2 = format_prompt(messages, tools=None)
+        text = await ai.ask(formatted2, model=model, history=None)
     out = _strip_degenerate_tool_json(text)
     if not out.strip():
-        text = await ai.ask(base_prompt, model=model, history=history)
+        text = await ai.ask(format_prompt(messages, tools=None), model=model, history=None)
         out = _strip_degenerate_tool_json(text) or text.strip()
-    return out.strip() or "(Empty reply from model; try disabling Tools in the n8n OpenAI node.)"
+    return _finalize_response_text(out or text)
 
 
-def _format_tools_instruction(tools: list) -> str:
-    out = "\n=== TOOL USAGE (when applicable) ===\n"
-    out += "If a listed tool clearly applies, respond with ONLY valid JSON:\n"
-    out += '{"tool_calls": [{"name": "TOOL_NAME", "arguments": {"param": "value"}}]}\n'
-    out += "If no tool applies, reply with normal plain text only (do NOT output JSON with an empty tool_calls array).\n\n"
-    for tool in tools:
-        func = tool.get("function", tool)
-        name = func.get("name", "unknown")
-        desc = func.get("description", "")
-        params = func.get("parameters", {})
-        out += f"Tool: {name}\nDescription: {desc}\n"
-        if params.get("properties"):
-            req = params.get("required", [])
-            for pn, pi in params["properties"].items():
-                out += f"  - {pn} ({'required' if pn in req else 'optional'}): {pi.get('description','')}\n"
-        out += "\n"
-    out += "=== END OF TOOLS ===\n\n"
-    return out
-
-
-def _parse_tool_calls(text: str) -> Optional[list]:
-    cleaned = text.strip()
-    if "```" in cleaned:
-        m = re.search(r'```(?:json)?\s*\n?(.*?)\n?\s*```', cleaned, re.DOTALL)
-        if m:
-            cleaned = m.group(1).strip()
-
-    candidates = [cleaned]
-    m = re.search(r'\{[\s\S]*"tool_calls"[\s\S]*\}', cleaned)
-    if m:
-        candidates.append(m.group(0))
-
-    for c in candidates:
-        try:
-            parsed = json.loads(c)
-            if isinstance(parsed, dict) and "tool_calls" in parsed:
-                raw = parsed["tool_calls"]
-                if isinstance(raw, list) and raw:
-                    return [
-                        {
-                            "id": f"call_{uuid.uuid4().hex[:24]}",
-                            "type": "function",
-                            "function": {
-                                "name": call.get("name", ""),
-                                "arguments": json.dumps(call.get("arguments", {}), ensure_ascii=False)
-                                if isinstance(call.get("arguments"), dict)
-                                else str(call.get("arguments", "{}"))
-                            }
-                        }
-                        for call in raw
-                    ]
-        except (json.JSONDecodeError, TypeError, KeyError):
-            continue
-    return None
-
-
-def _build_completion(data: dict, text: str, start: float, tool_calls=None) -> dict:
-    p_tok = max(1, len(text.split()) // 2)
+def _build_completion(
+    data: dict,
+    text: str,
+    start: float,
+    tool_calls=None,
+    *,
+    prompt_for_usage: Optional[str] = None,
+) -> dict:
+    if prompt_for_usage is not None:
+        p_tok = max(1, len(prompt_for_usage.split()))
+    else:
+        p_tok = max(1, len(text.split()) // 2)
     c_tok = max(1, len(text.split()))
     base = {
         "id": f"chatcmpl-{uuid.uuid4().hex[:29]}",
@@ -244,9 +180,25 @@ def _build_completion(data: dict, text: str, start: float, tool_calls=None) -> d
         "usage": {"prompt_tokens": p_tok, "completion_tokens": c_tok, "total_tokens": p_tok + c_tok},
     }
     if tool_calls:
-        base["choices"] = [{"index": 0, "message": {"role": "assistant", "content": None, "tool_calls": tool_calls}, "finish_reason": "tool_calls"}]
+        base["choices"] = [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": tool_calls,
+                },
+                "finish_reason": "tool_calls",
+            }
+        ]
     else:
-        base["choices"] = [{"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}]
+        base["choices"] = [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": text},
+                "finish_reason": "stop",
+            }
+        ]
     return base
 
 
@@ -285,6 +237,8 @@ async def list_models():
     }
 
 
+# After deploy: GET /v1/models; POST /v1/chat/completions with {"model":"auto","messages":[{"role":"user","content":"hi"}]}
+# — expect choices[0].message.content as plain text (no tool_calls key on stop).
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
     if not _check_auth(request):
@@ -294,7 +248,7 @@ async def chat_completions(request: Request):
     except Exception:
         return JSONResponse(status_code=400, content={"error": {"message": "Invalid JSON"}})
 
-    messages = data.get("messages", [])
+    messages = _sanitize_messages_list(data.get("messages", []))
     if not messages:
         return JSONResponse(status_code=400, content={"error": {"message": "messages required"}})
 
@@ -303,14 +257,16 @@ async def chat_completions(request: Request):
     start = time.time()
 
     try:
-        base_prompt, history = _messages_to_prompt(messages)
-
-        response_text = await _ask_with_tool_fallback(
-            base_prompt, history, model, tools_effective
+        formatted_for_usage = format_prompt(messages, tools=tools_effective)
+        response_text = await _complete_with_formatted_prompt(
+            messages, model, tools_effective
         )
-
-        tool_calls = _parse_tool_calls(response_text) if tools_effective else None
-        result = _build_completion(data, response_text, start, tool_calls)
+        tool_calls = (
+            prompt_format.parse_tool_calls_lite(response_text) if tools_effective else None
+        )
+        result = _build_completion(
+            data, response_text, start, tool_calls, prompt_for_usage=formatted_for_usage
+        )
         u = result["usage"]
         stats.record(True, u["prompt_tokens"], u["completion_tokens"], model)
         return result
@@ -343,19 +299,21 @@ async def responses_api(request: Request):
     if instructions:
         messages.insert(0, {"role": "system", "content": instructions})
 
+    messages = _sanitize_messages_list(messages)
+
     tools_effective = _effective_tools(data)
     model = data.get("model", "auto")
     start = time.time()
 
     try:
-        base_prompt, history = _messages_to_prompt(messages)
-
-        response_text = await _ask_with_tool_fallback(
-            base_prompt, history, model, tools_effective
+        formatted_for_usage = format_prompt(messages, tools=tools_effective)
+        response_text = await _complete_with_formatted_prompt(
+            messages, model, tools_effective
         )
-
-        tool_calls = _parse_tool_calls(response_text) if tools_effective else None
-        p_tok = max(1, len((base_prompt + (_format_tools_instruction(tools_effective) if tools_effective else "")).split()))
+        tool_calls = (
+            prompt_format.parse_tool_calls_lite(response_text) if tools_effective else None
+        )
+        p_tok = max(1, len(formatted_for_usage.split()))
         c_tok = max(1, len(response_text.split()))
         stats.record(True, p_tok, c_tok, model)
 
