@@ -34,6 +34,7 @@ MODEL_MAP = {
 }
 
 MAX_RETRIES = 3
+MAX_VQD_EVAL_RETRIES = 6
 DDG_STATUS_URL = "https://duckduckgo.com/duckchat/v1/status"
 DDG_CHAT_URL = "https://duckduckgo.com/duckchat/v1/chat"
 DDG_ENTRY_REF = "https://duckduckgo.com/?q=DuckDuckGo+AI+Chat&ia=chat&duckai=1"
@@ -118,6 +119,48 @@ async def shutdown_playwright() -> None:
             _pw = None
 
 
+def _status_headers() -> dict:
+    return {
+        "Accept": "application/json",
+        "Referer": DDG_ENTRY_REF,
+        "Origin": "https://duckduckgo.com",
+        "x-vqd-accept": "1",
+    }
+
+
+async def _solve_vqd_hash_hdr(ctx, page) -> str:
+    """
+    DDG's x-vqd-hash-1 script touches the live DOM (querySelector + getAttribute).
+    If the page is not ready, evaluate throws. Always pair a fresh status request
+    with evaluate, and retry with reload between attempts.
+    """
+    last_err: Optional[BaseException] = None
+    for attempt in range(MAX_VQD_EVAL_RETRIES):
+        st = await ctx.request.get(DDG_STATUS_URL, headers=_status_headers())
+        if st.status != 200:
+            raise ValueError(f"Status endpoint returned {st.status}")
+        hb64 = st.headers.get("x-vqd-hash-1") or ""
+        if not hb64:
+            raise ValueError("x-vqd-hash-1 header missing from status response (DDG API changed?)")
+        try:
+            return await page.evaluate(_EVAL_HASH_HDR, hb64)
+        except Exception as e:
+            last_err = e
+            err_s = str(e).lower()
+            if attempt >= MAX_VQD_EVAL_RETRIES - 1:
+                break
+            if "getattribute" not in err_s and "null" not in err_s and "cannot read properties" not in err_s:
+                raise
+            await page.goto(DDG_ENTRY_REF, wait_until="load", timeout=45_000)
+            try:
+                await page.wait_for_load_state("networkidle", timeout=12_000)
+            except Exception:
+                pass
+            await asyncio.sleep(0.35 + random.random() * 0.45 + attempt * 0.15)
+    assert last_err is not None
+    raise last_err
+
+
 async def _do_chat(model: str, messages: list) -> str:
     ua = random.choice(USER_AGENTS)
     browser = await _ensure_browser()
@@ -132,25 +175,14 @@ async def _do_chat(model: str, messages: list) -> str:
             "https://duckduckgo.com/",
             headers={"Referer": DDG_ENTRY_REF},
         )
-        await page.goto(DDG_ENTRY_REF, wait_until="domcontentloaded", timeout=30_000)
+        await page.goto(DDG_ENTRY_REF, wait_until="load", timeout=45_000)
+        try:
+            await page.wait_for_load_state("networkidle", timeout=15_000)
+        except Exception:
+            pass
+        await asyncio.sleep(0.25 + random.random() * 0.35)
 
-        st = await ctx.request.get(
-            DDG_STATUS_URL,
-            headers={
-                "Accept": "application/json",
-                "Referer": DDG_ENTRY_REF,
-                "Origin": "https://duckduckgo.com",
-                "x-vqd-accept": "1",
-            },
-        )
-        if st.status != 200:
-            raise ValueError(f"Status endpoint returned {st.status}")
-
-        hb64 = st.headers.get("x-vqd-hash-1") or ""
-        if not hb64:
-            raise ValueError("x-vqd-hash-1 header missing from status response (DDG API changed?)")
-
-        hash_hdr = await page.evaluate(_EVAL_HASH_HDR, hb64)
+        hash_hdr = await _solve_vqd_hash_hdr(ctx, page)
 
         body = {
             "model": model,

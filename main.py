@@ -121,10 +121,17 @@ def _messages_to_prompt(messages: list) -> tuple[str, list]:
     return prompt, history[:-1] if history else []
 
 
+def _is_degenerate_empty_tool_json(text: str) -> bool:
+    """LangChain/n8n often bind tools; the model may reply with only {\"tool_calls\": []}."""
+    t = text.strip()
+    return bool(re.fullmatch(r'\{\s*"tool_calls"\s*:\s*\[\s*\]\s*\}', t))
+
+
 def _format_tools_instruction(tools: list) -> str:
-    out = "\n=== MANDATORY TOOL USAGE ===\n"
-    out += "Respond with ONLY valid JSON:\n"
-    out += '{"tool_calls": [{"name": "TOOL_NAME", "arguments": {"param": "value"}}]}\n\n'
+    out = "\n=== TOOL USAGE (when applicable) ===\n"
+    out += "If a listed tool clearly applies, respond with ONLY valid JSON:\n"
+    out += '{"tool_calls": [{"name": "TOOL_NAME", "arguments": {"param": "value"}}]}\n'
+    out += "If no tool applies, reply with normal plain text only (do NOT output JSON with an empty tool_calls array).\n\n"
     for tool in tools:
         func = tool.get("function", tool)
         name = func.get("name", "unknown")
@@ -238,11 +245,13 @@ async def chat_completions(request: Request):
     start = time.time()
 
     try:
-        prompt, history = _messages_to_prompt(messages)
-        if tools:
-            prompt += _format_tools_instruction(tools)
+        base_prompt, history = _messages_to_prompt(messages)
+        prompt = base_prompt + (_format_tools_instruction(tools) if tools else "")
 
         response_text = await ai.ask(prompt, model=model, history=history)
+        if tools and _is_degenerate_empty_tool_json(response_text):
+            response_text = await ai.ask(base_prompt, model=model, history=history)
+
         tool_calls = _parse_tool_calls(response_text) if tools else None
         result = _build_completion(data, response_text, start, tool_calls)
         u = result["usage"]
@@ -282,11 +291,13 @@ async def responses_api(request: Request):
     start = time.time()
 
     try:
-        prompt, history = _messages_to_prompt(messages)
-        if tools:
-            prompt += _format_tools_instruction(tools)
+        base_prompt, history = _messages_to_prompt(messages)
+        prompt = base_prompt + (_format_tools_instruction(tools) if tools else "")
 
         response_text = await ai.ask(prompt, model=model, history=history)
+        if tools and _is_degenerate_empty_tool_json(response_text):
+            response_text = await ai.ask(base_prompt, model=model, history=history)
+
         tool_calls = _parse_tool_calls(response_text) if tools else None
         p_tok = max(1, len(prompt.split()))
         c_tok = max(1, len(response_text.split()))
